@@ -47,6 +47,14 @@
 		       __func__, ## arg); \
 	}
 
+#if 0
+#define HS_DBG_LOG(fmt, arg...) \
+	printk(KERN_INFO "##### [" DRIVER_NAME "] (%s) " fmt "\n", \
+	       __func__, ## arg)
+#else
+#define HS_DBG_LOG(fmt, arg...) {}
+#endif
+
 #define DEVICE_ACCESSORY_ATTR(_name, _mode, _show, _store) \
 	struct device_attribute dev_attr_##_name = \
 	__ATTR(flag, _mode, _show, _store)

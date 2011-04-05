@@ -59,21 +59,21 @@ config SND_MSM_SOC_MSM7KV2
 config SND_MVS_SOC
 	tristate "SoC Mvs support for MSM7X30"
 	depends on MSM7KV2_AUDIO
-	default y
+	default n
 	help
 	To support Mvs packet capture/playback
 
 config SND_MSM_MVS7x30_SOC
 	tristate "SoC MVS7x30 support for MSM7X30"
 	depends on SND_MVS_SOC
-	default y
+	default n
 	help
 	To support Mvs packet capture/playback
 
 config SND_MSM_MVS_DAI_SOC
 	tristate "SoC CPU/CODEC DAI for the MSM7x30 chip"
 	depends on SND_MVS_SOC
-	default y
+	default n
 	help
 	 To add support for ALSA PCM driver for MSM7x30 board.
 
@@ -88,7 +88,7 @@ config SND_SOC_MSM8X60
 	depends on ARCH_MSM8X60 && SND_SOC && MSM8X60_AUDIO
 	select SND_SOC_MSM8X60_PCM
 	select SND_SOC_MSM8X60_DAI
-	default y
+	default n
 	help
 	 To add support for SoC audio on MSM8X60. This driver
 	 Adds support for audio over DSP. The driver adds Kcontrols

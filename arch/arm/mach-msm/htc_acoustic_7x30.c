@@ -22,10 +22,9 @@
 #include <linux/gfp.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
-#include <linux/mfd/msm-adie-codec.h>
-#include <mach/qdsp5v2/snddev_icodec.h>
-#include <mach/qdsp5v2/audio_dev_ctl.h>
-#include <mach/qdsp5v2/audio_acdb.h>
+#include <mach/qdsp5v2_1x/snddev_icodec.h>
+#include <mach/qdsp5v2_1x/audio_dev_ctl.h>
+#include <mach/qdsp5v2_1x/audio_acdb.h>
 #include <mach/htc_headset_mgr.h>
 
 #include <mach/msm_smd.h>

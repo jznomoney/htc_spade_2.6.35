@@ -458,43 +458,6 @@ static void diag_dsp_in_complete(struct usb_ep *ept, struct usb_request *req)
 }
 #endif
 
-static void diag_process_hdlc(struct diag_context *ctxt, void *_data, unsigned len)
-{
-	unsigned char *data = _data;
-	unsigned count = ctxt->hdlc_count;
-	unsigned escape = ctxt->hdlc_escape;
-	unsigned char *hdlc = ctxt->hdlc_buf;
-
-	while (len-- > 0) {
-		unsigned char x = *data++;
-		if (x == 0x7E) { 
-			if (count > 2) {
-				/* we're just ignoring the crc here */
-				TRACE("PC>", hdlc, count - 2, 0);
-				if (ctxt->ch)
-					smd_write(ctxt->ch, hdlc, count - 2);
-			}
-			count = 0;
-			escape = 0;
-		} else if (x == 0x7D) {
-			escape = 1;
-		} else {
-			if (escape) {
-				x = x ^ 0x20;
-				escape = 0;
-			}
-			hdlc[count++] = x;
-
-			/* discard frame if we overflow */
-			if (count == HDLC_MAX)
-				count = 0;
-		}
-	}
-
-	ctxt->hdlc_count = count;
-	ctxt->hdlc_escape = escape;
-}
-
 #if ROUTE_TO_USERSPACE
 static int if_route_to_userspace(struct diag_context *ctxt, unsigned int cmd_id)
 {
@@ -870,7 +833,7 @@ module_param_call(tx_rx_count, NULL, diag_get_tx_rx_count, NULL, 0444);
 
 static int diag_get_enabled(char *buffer, struct kernel_param *kp)
 {
-	buffer[0] = '0' + !_context.function.disabled;
+	buffer[0] = '0' + !_context.function.hidden;
 	return 1;
 }
 module_param_call(enabled, diag_set_enabled, diag_get_enabled, NULL, 0664);
@@ -904,7 +867,7 @@ int diag_bind_config(struct usb_configuration *c)
 	ctxt->function.set_alt = diag_function_set_alt;
 	ctxt->function.disable = diag_function_disable;
 
-	ctxt->function.disabled = !_context.function_enable;
+	ctxt->function.hidden = !_context.function_enable;
 
 	return usb_add_function(c, &ctxt->function);
 }
