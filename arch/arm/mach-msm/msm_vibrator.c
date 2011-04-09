@@ -135,11 +135,12 @@ static struct timed_output_dev pmic_vibrator = {
 	.get_level = get_vibrator_level,
 };
 
-void __init msm_init_pmic_vibrator(void)
+void __init msm_init_pmic_vibrator(int level)
 {
 	INIT_WORK(&vibrator_work, update_vibrator);
 
 	spin_lock_init(&vibe_lock);
+	pmic_vibrator_level = level;
 	vibe_state = 0;
 	hrtimer_init(&vibe_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	vibe_timer.function = vibrator_timer_func;

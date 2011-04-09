@@ -2030,7 +2030,7 @@ static void __init spade_init(void)
 	msm_acpu_clock_init(&spade_clock_data);
 	perflock_init(&spade_perflock_data);
 
-	msm_init_pmic_vibrator();
+	msm_init_pmic_vibrator(3000);
 #ifdef CONFIG_MICROP_COMMON
 	spade_microp_init();
 #endif
