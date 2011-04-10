@@ -19,7 +19,6 @@
 #include <linux/uaccess.h>
 #include <linux/mm.h>
 #include <linux/delay.h>
-#include <linux/firmware.h>
 
 #include <mach/msm_smd.h>
 #include <mach/msm_iomap.h>
@@ -28,7 +27,10 @@
 #include "smd_private.h"
 
 #define ACDB_IOCTL_MAGIC 'd'
-#define HTC_REINIT_ACDB    _IOW(ACDB_IOCTL_MAGIC, 1, unsigned)
+#define HTC_ACDB_UPDATE_SIZE	_IOR(ACDB_IOCTL_MAGIC, 1, size_t)
+#define HTC_ACDB_UPDATE_TABLE	_IOW(ACDB_IOCTL_MAGIC, 2, \
+					struct acdb_update_info *)
+#define HTC_ACDB_GET_SMEM_SIZE  _IOR(ACDB_IOCTL_MAGIC, 3, uint32_t)
 
 #define D(fmt, args...) printk(KERN_INFO "htc-acdb: "fmt, ##args)
 #define E(fmt, args...) printk(KERN_ERR "htc-acdb: "fmt, ##args)
@@ -36,7 +38,6 @@
 #define SHARE_PAGES 4
 
 #define HTC_DEF_ACDB_SMEM_SIZE        (0x50000)
-#define HTC_DEF_ACDB_RADIO_BUFFER_SIZE        (1024 * 2048)
 #define HTCPROG	0x30100002
 #define HTCVERS 0
 #define ONCRPC_ALLOC_ACDB_MEM_PROC (1)
@@ -47,12 +48,10 @@ static volatile uint32_t htc_acdb_vir_addr;
 static struct msm_rpc_endpoint *endpoint;
 static struct mutex api_lock;
 static struct mutex rpc_connect_lock;
+static int acdb_inited;
 static struct acdb_ops default_acdb_ops;
 static struct acdb_ops *the_ops = &default_acdb_ops;
 static uint32_t acdb_smem_size;
-static char acdb_init_file[64];
-
-static int acdb_init(char*);
 
 struct acdb_update_info {
 	uint32_t size;
@@ -71,7 +70,7 @@ static int is_rpc_connect(void)
 		endpoint = msm_rpc_connect(HTCPROG,
 				HTCVERS, 0);
 		if (IS_ERR(endpoint)) {
-			pr_aud_err("%s: init rpc failed! rc = %ld\n",
+			pr_err("%s: init rpc failed! rc = %ld\n",
 				__func__, PTR_ERR(endpoint));
 			mutex_unlock(&rpc_connect_lock);
 			return -1;
@@ -81,102 +80,9 @@ static int is_rpc_connect(void)
 	return 0;
 }
 
-static int update_acdb_table_size(uint32_t total_size)
-{
-	int reply_value = -1, rc = 0;
-
-	struct update_size_req {
-		struct rpc_request_hdr hdr;
-		uint32_t size;
-	} sz_req;
-
-	struct update_size_rep {
-		struct rpc_reply_hdr hdr;
-		int ret;
-	} sz_rep;
-
-	D("%s: total size = %d\n", __func__, total_size);
-	sz_req.size = cpu_to_be32(total_size);
-	sz_rep.ret = cpu_to_be32(reply_value);
-
-	rc = msm_rpc_call_reply(endpoint,
-		ONCRPC_UPDATE_TABLE_SIZE_PROC,
-		&sz_req, sizeof(sz_req),
-		&sz_rep, sizeof(sz_rep), 5 * HZ);
-
-	reply_value = be32_to_cpu(sz_rep.ret);
-	if (reply_value != 0) {
-		D("%s: rpc update size failed %d\n",
-			__func__, reply_value);
-		rc = reply_value;
-	}
-
-	return rc;
-}
-
-static int update_acdb_table(uint32_t size, int done)
-{
-	int reply_value = -1, rc = 0;
-	struct update_table_req {
-		struct rpc_request_hdr hdr;
-		uint32_t update_size;
-		int done;
-	} tbl_req;
-
-	struct update_table_rep {
-		struct rpc_reply_hdr hdr;
-		int ret;
-	} tbl_rep;
-
-	if (size <= 0 || size > acdb_smem_size) {
-		E("invalid table size %d\n", size);
-		return -EINVAL;
-	}
-
-	tbl_req.update_size = cpu_to_be32(size);
-	tbl_req.done = cpu_to_be32(done);
-	tbl_rep.ret = cpu_to_be32(reply_value);
-
-	if (done)
-		D("%s: update table %d bytes, done %d\n",
-			__func__, size, done);
-
-	rc = msm_rpc_call_reply(endpoint,
-		ONCRPC_REINIT_ACDB_TABLE_PROC,
-		&tbl_req, sizeof(tbl_req),
-		&tbl_rep, sizeof(tbl_rep), 5 * HZ);
-
-	reply_value = be32_to_cpu(tbl_rep.ret);
-	if (reply_value != 0) {
-		E("%s: rpc update table failed %d\n",
-			__func__, reply_value);
-		rc = reply_value;
-	}
-
-	return rc;
-}
-
-static int htc_reinit_acdb(char* filename) {
-	int rc = 0;
-
-	if (strlen(filename) < 0) {
-		rc = -EINVAL;
-		goto done;
-	}
-	if (strcmp(filename, acdb_init_file)) {
-		rc = acdb_init(filename);
-		if (!rc)
-			strcpy(acdb_init_file, filename);
-	}
-done:
-	D("%s: load '%s', return %d\n", __func__, filename, rc);
-	return rc;
-
-}
-
 static int htc_acdb_open(struct inode *inode, struct file *file)
 {
-	int reply_value = -1;
+	int reply_value;
 	int rc = -EIO;
 	struct set_smem_req {
 		struct rpc_request_hdr hdr;
@@ -201,11 +107,9 @@ static int htc_acdb_open(struct inode *inode, struct file *file)
 		else
 			acdb_smem_size = HTC_DEF_ACDB_SMEM_SIZE;
 
-		pr_aud_info("%s: smem size %d\n", __func__, acdb_smem_size);
+		pr_info("%s: smem size %d\n", __func__, acdb_smem_size);
 
 		req_smem.size = cpu_to_be32(acdb_smem_size);
-		rep_smem.n = cpu_to_be32(reply_value);
-
 		rc = msm_rpc_call_reply(endpoint,
 					ONCRPC_ALLOC_ACDB_MEM_PROC,
 					&req_smem, sizeof(req_smem),
@@ -224,7 +128,6 @@ static int htc_acdb_open(struct inode *inode, struct file *file)
 			E("open failed: smem_alloc error\n");
 			goto done;
 		}
-		htc_acdb_vir_addr = ((htc_acdb_vir_addr + 4095) & ~4095);
 	}
 
 	rc = 0;
@@ -243,17 +146,107 @@ static long
 htc_acdb_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	int rc = 0;
-	char filename[64];
+	uint32_t total_size;
+	struct acdb_update_info info;
 
 	mutex_lock(&api_lock);
 	switch (cmd) {
-	case HTC_REINIT_ACDB:
-		memset(filename, 0, sizeof(filename));
-		rc = copy_from_user(&filename, (void *)arg, sizeof(filename));
-		if (!rc)
-			rc = htc_reinit_acdb(filename);
-		break;
+	case HTC_ACDB_UPDATE_SIZE: {
+		int reply_value;
+		struct update_size_req {
+			struct rpc_request_hdr hdr;
+			uint32_t size;
+		} sz_req;
 
+		struct update_size_rep {
+			struct rpc_reply_hdr hdr;
+			int ret;
+		} sz_rep;
+
+		if (acdb_inited)
+			break;
+
+		if (copy_from_user(&total_size,
+			(void *)arg, sizeof(uint32_t))) {
+			rc = -EFAULT;
+			break;
+		}
+		D("htc_acdb_ioctl: total size = %d\n", total_size);
+		sz_req.size = cpu_to_be32(total_size);
+
+		rc = msm_rpc_call_reply(endpoint,
+			ONCRPC_UPDATE_TABLE_SIZE_PROC,
+			&sz_req, sizeof(sz_req),
+			&sz_rep, sizeof(sz_rep), 5 * HZ);
+
+		reply_value = be32_to_cpu(sz_rep.ret);
+		if (reply_value != 0) {
+			D("htc_acdb_ioctl: rpc update size failed %d\n",
+				reply_value);
+			rc = reply_value;
+		}
+
+		break;
+	}
+	case HTC_ACDB_UPDATE_TABLE: {
+		int reply_value;
+		struct update_table_req {
+			struct rpc_request_hdr hdr;
+			uint32_t update_size;
+			int done;
+		} tbl_req;
+
+		struct update_table_rep {
+			struct rpc_reply_hdr hdr;
+			int ret;
+		} tbl_rep;
+
+		if (acdb_inited)
+			break;
+
+		if (copy_from_user(&info, (void *)arg,
+			sizeof(struct acdb_update_info))) {
+			rc = -EFAULT;
+			break;
+		}
+
+		if (info.size <= 0) {
+			E("invalid table size\n");
+			rc = -EINVAL;
+			break;
+		}
+
+		tbl_req.update_size = cpu_to_be32(info.size);
+		tbl_req.done = cpu_to_be32(info.done);
+
+		if (info.done)
+			D("htc_acdb_ioctl: update table %d bytes, done %d\n",
+				info.size, info.done);
+
+		rc = msm_rpc_call_reply(endpoint,
+			ONCRPC_REINIT_ACDB_TABLE_PROC,
+			&tbl_req, sizeof(tbl_req),
+			&tbl_rep, sizeof(tbl_rep), 5 * HZ);
+
+		reply_value = be32_to_cpu(tbl_rep.ret);
+		if (reply_value != 0) {
+			D("htc_acdb_iotcl: rpc update table failed %d\n",
+				reply_value);
+			rc = reply_value;
+		} else if (info.done)
+			acdb_inited = 1;
+
+		msleep(10);
+		break;
+	}
+	case HTC_ACDB_GET_SMEM_SIZE: {
+		if (copy_to_user((void *) arg,
+			&acdb_smem_size, sizeof(uint32_t))) {
+			E("htc_acdb_ioctl: get smem size failed\n");
+			rc = -EFAULT;
+		}
+		break;
+	}
 	default:
 		rc = -EINVAL;
 	}
@@ -261,10 +254,63 @@ htc_acdb_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	return rc;
 }
 
+static int htc_acdb_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	unsigned long pgoff;
+	int rc = -EINVAL;
+	size_t size;
+
+	D("mmap\n");
+
+	mutex_lock(&api_lock);
+
+	size = vma->vm_end - vma->vm_start;
+
+	if (vma->vm_pgoff != 0) {
+		E("mmap failed: page offset %lx\n", vma->vm_pgoff);
+		goto done;
+	}
+
+	if (!htc_acdb_vir_addr) {
+		E("mmap failed: smem region not allocated\n");
+		rc = -EIO;
+		goto done;
+	}
+
+	pgoff = MSM_SHARED_RAM_PHYS +
+		(htc_acdb_vir_addr - (uint32_t)MSM_SHARED_RAM_BASE);
+	pgoff = ((pgoff + 4095) & ~4095);
+	htc_acdb_vir_addr = ((htc_acdb_vir_addr + 4095) & ~4095);
+
+	if (pgoff <= 0) {
+		E("pgoff wrong. %ld\n", pgoff);
+		goto done;
+	}
+
+	if (size <= acdb_smem_size) {
+		pgoff = pgoff >> PAGE_SHIFT;
+	} else {
+		E("size > acdb_smem_size %d\n", acdb_smem_size);
+		goto done;
+	}
+
+	vma->vm_flags |= VM_IO | VM_RESERVED;
+	rc = io_remap_pfn_range(vma, vma->vm_start, pgoff,
+				size, vma->vm_page_prot);
+
+	if (rc < 0)
+		E("mmap failed: remap error %d\n", rc);
+
+done:	mutex_unlock(&api_lock);
+	return rc;
+}
+
+
 static const struct file_operations htc_acdb_fops = {
 	.owner = THIS_MODULE,
 	.open = htc_acdb_open,
 	.release = htc_acdb_release,
+	.mmap = htc_acdb_mmap,
 	.unlocked_ioctl = htc_acdb_ioctl,
 };
 
@@ -274,61 +320,6 @@ static struct miscdevice htc_acdb_misc = {
 	.fops = &htc_acdb_fops,
 };
 
-static int acdb_init(char *filename)
-{
-	const void *db;
-	const struct firmware *fw;
-	uint32_t size = 0, ptr, acdb_radio_buffer_size = 0;
-	int rc = 0;
-
-	pr_aud_info("acdb: load '%s'\n", filename);
-	if (request_firmware(&fw, filename, htc_acdb_misc.this_device) < 0) {
-		pr_aud_err("acdb: load '%s' failed...\n", filename);
-		return -ENODEV;
-	}
-
-	if (fw == NULL)
-		return -EINVAL;
-	db = (void*) fw->data;
-
-	if (the_ops->get_acdb_radio_buffer_size)
-		acdb_radio_buffer_size = the_ops->get_acdb_radio_buffer_size();
-	else
-		acdb_radio_buffer_size = HTC_DEF_ACDB_RADIO_BUFFER_SIZE;
-
-	if (fw->size > acdb_radio_buffer_size) {
-		E("acdb_init: table size too large (%d bytes)\n", fw->size);
-		rc = -EINVAL;
-		goto fail;
-	}
-
-	rc = update_acdb_table_size(fw->size);
-	if (rc < 0)
-		goto fail;
-
-	for (ptr = 0; ptr < fw->size; ptr += acdb_smem_size) {
-		if (fw->size - ptr >= acdb_smem_size)
-			size = acdb_smem_size;
-		else
-			size = fw->size - ptr;
-
-		memcpy((void *) htc_acdb_vir_addr, (void *) db + ptr, size);
-		if (ptr + size == fw->size)
-			rc = update_acdb_table(size, 1);
-		else
-			rc = update_acdb_table(size, 0);
-
-		if (rc < 0)
-			goto fail;
-		else
-			msleep(10);
-	}
-	rc = 0;
-fail:
-	release_firmware(fw);
-	return rc;
-}
-
 static int __init htc_acdb_init(void)
 {
 	int ret = 0;
@@ -337,7 +328,7 @@ static int __init htc_acdb_init(void)
 	mutex_init(&rpc_connect_lock);
 	ret = misc_register(&htc_acdb_misc);
 	if (ret < 0)
-		pr_aud_err("%s: failed to register misc device!\n", __func__);
+		pr_err("%s: failed to register misc device!\n", __func__);
 
 	return ret;
 }
