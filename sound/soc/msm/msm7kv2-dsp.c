@@ -28,7 +28,7 @@
 #include <sound/initval.h>
 #include <asm/dma.h>
 #include <linux/dma-mapping.h>
-#include <mach/qdsp5v2/audio_dev_ctl.h>
+#include <mach/qdsp5v2_1x/audio_dev_ctl.h>
 #include <mach/debug_mm.h>
 
 #include "msm7kv2-pcm.h"

@@ -28,7 +28,7 @@
  */
 #ifndef __MACH_QDSP5_V2_AUX_PCM_H
 #define __MACH_QDSP5_V2_AUX_PCM_H
-#include <mach/qdsp5v2/audio_def.h>
+#include <mach/qdsp5v2_1x/audio_def.h>
 
 /* define some values in AUX_CODEC_CTL register */
 #define AUX_CODEC_CTL__ADSP_CODEC_CTL_EN__MSM_V 0 /* default */

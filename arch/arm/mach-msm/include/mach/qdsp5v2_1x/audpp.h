@@ -17,7 +17,7 @@
 #ifndef _MACH_QDSP5_V2_AUDPP_H
 #define _MACH_QDSP5_V2_AUDPP_H
 
-#include <mach/qdsp5v2/qdsp5audppcmdi.h>
+#include <mach/qdsp5v2_1x/qdsp5audppcmdi.h>
 
 typedef void (*audpp_event_func)(void *private, unsigned id, uint16_t *msg);
 

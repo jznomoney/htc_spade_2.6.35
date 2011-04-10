@@ -28,7 +28,7 @@
  */
 #ifndef __MACH_QDSP5_V2_SNDDEV_H
 #define __MACH_QDSP5_V2_SNDDEV_H
-#include <mach/qdsp5v2/audio_def.h>
+#include <mach/qdsp5v2_1x/audio_def.h>
 
 #define AUDIO_DEV_CTL_MAX_DEV 64
 #define DIR_TX	2

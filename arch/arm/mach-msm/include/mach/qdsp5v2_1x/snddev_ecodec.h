@@ -28,7 +28,7 @@
  */
 #ifndef __MACH_QDSP5_V2_SNDDEV_ECODEC_H
 #define __MACH_QDSP5_V2_SNDDEV_ECODEC_H
-#include <mach/qdsp5v2/audio_def.h>
+#include <mach/qdsp5v2_1x/audio_def.h>
 
 struct snddev_ecodec_data {
 	u32 capability; /* RX or TX */
