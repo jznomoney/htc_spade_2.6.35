@@ -39,8 +39,8 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_common_settings_array_mipi[] =
   { 0x309A , 0x01 },
   { 0x310D , 0xC6 },
   { 0x30C3 , 0x40 },
-  { 0x308E , 0x01 },
-  { 0x308F , 0x8F },
+  { 0x308E , 0x05 },
+  { 0x308F , 0x88 },
   { 0x30BB , 0x02 },
   { 0x30C7 , 0x1A },
   { 0x30BC , 0x38 },
@@ -115,7 +115,6 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_common_settings_array_mipi[] =
   { 0x0301 , 0x05 }, /* vt_pix_clk_div = 5 */
   { 0x030B , 0x01 }, /* op_sys_clk_div = 1 */
   { 0x0309 , 0x05 }, /* op_pix_clk_div = 5 */
-  { 0x30CC , 0xA0 }, /* DPHY_band_ctrl 560 ~ 640Mbps */
 };
 
 struct s5k3h1gx_i2c_reg_conf s5k3h1gx_common_settings_array_parallel[] =
@@ -126,8 +125,8 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_common_settings_array_parallel[] =
   { 0x3065 , 0x15 },  /* sync mode */
   { 0x310E , 0x08 },  /* reg_sel 08h:parallel / 04h: CCP / 00h : MIPI */
   { 0x0111 , 0x01 },  /* CCP2_signalling_mode */
-  { 0x308E , 0x01 },
-  { 0x308F , 0x8F },
+  { 0x308E , 0x05 },
+  { 0x308F , 0x88 },
   /* Manufacture Setting */
   { 0x3000 , 0x08 },
   { 0x3001 , 0x05 },
@@ -193,6 +192,7 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_common_settings_array_parallel[] =
 
 struct s5k3h1gx_i2c_reg_conf s5k3h1gx_qtr_settings_array_mipi[] =
 {
+  { 0x30CC , 0xA0 }, /* DPHY_band_ctrl 560 ~ 640Mbps */
   { 0x0344 , 0x00 }, /* Xaddrstart 0d */
   { 0x0345 , 0x00 },
   { 0x0346 , 0x00 }, /* Yaddrstart 0d */
@@ -205,7 +205,6 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_qtr_settings_array_mipi[] =
   { 0x0383 , 0x01 }, /* x_odd_inc = 1 */
   { 0x0385 , 0x01 }, /* y_even_inc = 1 */
   { 0x0387 , 0x03 }, /* y_odd_inc = 3 */
-  { 0x0105 , 0x01 }, /* skip corrupted frame - for preview flash when doing hjr af */
   { 0x034C , 0x06 }, /* x_output_size = 1640 */
   { 0x034D , 0x68 },
   { 0x034E , 0x04 }, /* y_output_size = 1232 */
@@ -227,6 +226,7 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_qtr_settings_array_mipi[] =
   { 0x3087 , 0x34 }, /* Reserved */
   { 0x3065 , 0x15 }, /* Reserved */
   { 0x3028 , 0x40 }, /* Reserved */
+  { 0x0100 , 0x01 },
 };
 
 struct s5k3h1gx_i2c_reg_conf s5k3h1gx_qtr_settings_array_parallel[] =
@@ -255,7 +255,6 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_qtr_settings_array_parallel[] =
   { 0x0383 , 0x01 }, /* x_odd_inc = 1 */
   { 0x0385 , 0x01 }, /* y_even_inc = 1 */
   { 0x0387 , 0x03 }, /* y_odd_inc = 3 */
-  { 0x0105 , 0x01 }, /* skip corrupted frame - for preview flash when doing hjr af */
   /* ------------- */
   { 0x0401 , 0x01 }, /* Derating_en  = 1 (disable) */
   { 0x0405 , 0x10 },
@@ -297,6 +296,7 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_qtr_settings_array_parallel[] =
 
 struct s5k3h1gx_i2c_reg_conf s5k3h1gx_full_settings_array_mipi[] =
 {
+  { 0x30CC , 0xA0 }, /* DPHY_band_ctrl 560 ~ 640Mbps */
   { 0x0344 , 0x00 }, /* X addr start 0d */
   { 0x0345 , 0x00 },
   { 0x0346 , 0x00 }, /* Y addr start 0d */
@@ -309,7 +309,6 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_full_settings_array_mipi[] =
   { 0x0383 , 0x01 }, /* x_odd_inc = 1 */
   { 0x0385 , 0x01 }, /* y_even_inc = 1 */
   { 0x0387 , 0x01 }, /* y_odd_inc = 1 */
-  { 0x0105 , 0x01 }, /* skip corrupted frame - for preview flash when doing hjr af */
   { 0x034C , 0x0C }, /* x_output_size = 3280 */
   { 0x034D , 0xD0 },
   { 0x034E , 0x09 }, /* y_output_size = 2464 */
@@ -331,6 +330,7 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_full_settings_array_mipi[] =
   { 0x3087 , 0x34 }, /* Reserved */
   { 0x3065 , 0x15 }, /* Reserved */
   { 0x3028 , 0x41 }, /* Reserved */
+  { 0x0100 , 0x01 },
 };
 
 struct s5k3h1gx_i2c_reg_conf s5k3h1gx_full_settings_array_parallel[] =
@@ -358,7 +358,6 @@ struct s5k3h1gx_i2c_reg_conf s5k3h1gx_full_settings_array_parallel[] =
   { 0x0383 , 0x01 }, /* x_odd_inc = 1 */
   { 0x0385 , 0x01 }, /* y_even_inc = 1 */
   { 0x0387 , 0x01 }, /* y_odd_inc = 1 */
-  { 0x0105 , 0x01 }, /* skip corrupted frame - for preview flash when doing hjr af */
   /* ------------- */
   { 0x0401 , 0x00 }, /* Scaler OFF */
   { 0x0405 , 0x10 }, /* Scaling ratio 16/16 */

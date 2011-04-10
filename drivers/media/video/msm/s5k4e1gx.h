@@ -38,11 +38,6 @@ struct s5k4e1gx_reg_t {
 	uint16_t analog_settings_evt2_size;
 	struct s5k4e1gx_i2c_reg_conf *analog_settings_evt3;
 	uint16_t analog_settings_evt3_size;
-	struct s5k4e1gx_i2c_reg_conf *analog_settings_saga;
-	uint16_t analog_settings_saga_size;
-	/* 1126 for improve shutter of MIPI */
-	struct s5k4e1gx_i2c_reg_conf *analog_settings_saga_zero_shutter;
-	uint16_t analog_settings_saga_zero_shutter_size;
 };
 
 extern struct s5k4e1gx_reg_t s5k4e1gx_regs;

@@ -21,13 +21,12 @@
 #include <linux/i2c.h>
 #include <linux/uaccess.h>
 #include <linux/miscdevice.h>
+#include <linux/slab.h>
 #include <media/msm_camera.h>
-#include <media/msm_camera_sensor.h>
 #include <mach/gpio.h>
 #include <mach/camera.h>
 #include "s5k4e1gx.h"
 #include <linux/wakelock.h>
-#include <linux/slab.h>
 #include <mach/vreg.h>
 #include <asm/mach-types.h>
 
@@ -48,7 +47,6 @@ static struct wake_lock s5k4e1gx_wake_lock;
 
 static int sensor_probe_node = 0;
 static int preview_frame_count = 0;
-static int fps_mode_sel;
 
 static inline void init_suspend(void)
 {
@@ -134,10 +132,6 @@ static inline void allow_suspend(void)
 #define S5K4E1GX_REG_SOFTWARE_RESET		0x0103
 #define S5K4E1GX_SOFTWARE_RESET			    0x01
 
-#define S5K4E1GX_MIPI_REG_SOFTWARE_RESET		0x3030
-#define S5K4E1GX_MIPI_SOFTWARE_RESET			    0x06
-
-
 #define S5K4E1GX_REG_GROUP_PARAMETER_HOLD	0x0104
 #define S5K4E1GX_GROUP_PARAMETER_HOLD		    0x01
 #define S5K4E1GX_GROUP_PARAMETER_UNHOLD		    0x00
@@ -152,15 +146,8 @@ static inline void allow_suspend(void)
 
 #define S5K4E1GX_MAX_SNAPSHOT_EXP_LC		3961
 
-/* 1126 for MIPI */
-#define REG_MIPI_LANE_MODE		0x30E2
 #define MHz 1000000
 #define MCLK 24
-
-enum s5k4e1gx_reg_update_t{
-	REG_INIT,
-	REG_PERIODIC
-};
 
 struct reg_struct {
     // PLL Setting
@@ -168,10 +155,6 @@ struct reg_struct {
 	uint8_t pll_multiplier_msb;		/* 0x0306 */
 	uint8_t pll_multiplier_lsb;		/* 0x0307 */
 	uint8_t vt_sys_clk_div;			/* 0x30B5 */
-
-	/* Add for MIPI */
-	uint8_t MIPI_data_lane_modes;	/* 0x30E2 */
-
 	uint8_t DPHY_bandctrl;			/* 0x30F1 */
     // Read Mode
 	uint8_t read_mode;			/* 0x0101 */
@@ -212,154 +195,17 @@ struct reg_struct {
 	uint32_t  blk_p;
 };
 
-struct reg_struct s5k4e1gx_reg_cand[2] = {
-	{/*Preview, for normal speed*/
-		0x06,  /* pre_pll_clk_div               REG=0x0305 */
-		0x00,  /* pll_multiplier_msb            REG=0x0306 */
-		0x50,  /* pll_multiplier_lsb            REG=0x0307 */
-		0x00,  /* vt_sys_clk_div                REG=0x30B5 */
-
-		/* Add for MIPI */
-		0x02,  /* MIPI_data_lane_modes          REG=0x30E2 */
-
-		0xB0,  /* DPHY_bandctrl                 REG=0x30F1 */
-		0x00,  /* read_mode                     REG=0x0101 */
-		0x05,  /* x_output_size_msb             REG=0x034C */
-		0x18,  /* x_output_size_lsb             REG=0x034D */
-		0x03,  /* y_output_size_msb             REG=0x034E */
-		0xD4,  /* y_output_size_lsb             REG=0x034F */
-		0x01,  /* x_even_inc                    REG=0x0381 */
-		0x01,  /* x_odd_inc                     REG=0x0383 */
-		0x01,  /* y_even_inc                    REG=0x0385 */
-		0x03,  /* y_odd_inc                     REG=0x0387 */
-		0x02,  /* h_binning                     REG=0x30A9 */
-		0xEB,  /* v_binning                     REG=0x300E */
-		0x03,  /* frame_length_lines_msb        REG=0x0340 */
-		0xE0,  /* frame_length_lines_lsb        REG=0x0341 */
-		0x0A,  /* line_length_pck_msb           REG=0x0342 */
-		0xB2,  /* line_length_pck_lsb           REG=0x0343 */
-		0x10,  /* pclk_inv;                     REG=0x3110 */
-		0x0C,  /* pclk_delay;                   REG=0x3117 */
-		0x0A,  /* v_h_strength;                 REG=0x3119 */
-		0xAA,  /* data_pclk_strength;           REG=0x311A */
-		0x82,  /* cds_test                      REG=0x300F */
-		0xC0,  /* rst_offset1                   REG=0x3013 */
-		0xA4,  /* rmp_init                      REG=0x3017 */ /*0x94*/
-		0x88,  /* comp_bias                   REG=0x301B */ /*0x83*/
-		0x00,  /* analogue_gain_code_global_msb REG=0x0204 */
-		0x20,  /* analogue_gain_code_global_lsb REG=0x0205 */
-		0x03,  /* coarse_integration_time_msb   REG=0x0202 */
-		0x1F,  /* coarse_integration_time_lsb   REG=0x0203 */
-		 980,  /* size_h*/
-		  12,  /* blk_l*/
-		1304,  /* size_w*/
-		1434   /* blk_p*/
-	},
-	{/*Preview, for FAST speed*/
-		0x06,  /* pre_pll_clk_div               REG=0x0305 */
-		0x00,  /* pll_multiplier_msb            REG=0x0306 */
-		0x6A,  /* pll_multiplier_lsb            REG=0x0307 */
-		0x00,  /* vt_sys_clk_div                REG=0x30B5 */
-
-		/* Add for MIPI */
-		0x02,  /* MIPI_data_lane_modes          REG=0x30E2 */
-
-		0xD0,  /* DPHY_bandctrl                 REG=0x30F1 */
-		0x00,  /* read_mode                     REG=0x0101 */
-		0x05,  /* x_output_size_msb             REG=0x034C */
-		0x18,  /* x_output_size_lsb             REG=0x034D */
-		0x01,  /* y_output_size_msb             REG=0x034E */
-		0xEA,  /* y_output_size_lsb             REG=0x034F */
-		0x01,  /* x_even_inc                    REG=0x0381 */
-		0x01,  /* x_odd_inc                     REG=0x0383 */
-		0x01,  /* y_even_inc                    REG=0x0385 */
-		0x07,  /* y_odd_inc                     REG=0x0387 */
-		0x02,  /* h_binning                     REG=0x30A9 */
-		0xEB,  /* v_binning                     REG=0x300E */
-		0x02,  /* frame_length_lines_msb        REG=0x0340 */
-		0x05,  /* frame_length_lines_lsb        REG=0x0341 */
-		0x0A,  /* line_length_pck_msb           REG=0x0342 */
-		0xB2,  /* line_length_pck_lsb           REG=0x0343 */
-		0x00,  /* pclk_inv;                     REG=0x3110 */
-		0x06,  /* pclk_delay;                   REG=0x3117 */
-		0x0F,  /* v_h_strength;                 REG=0x3119 */
-		0xFF,  /* data_pclk_strength;           REG=0x311A */
-		0x82,  /* cds_test                      REG=0x300F */
-		0xC0,  /* rst_offset1                   REG=0x3013 */
-		0x94,  /* rmp_init                      REG=0x3017 */ /*0x94*/
-		0x83,  /* comp_bias                   REG=0x301B */ /*0x83*/
-		0x00,  /* analogue_gain_code_global_msb REG=0x0204 */
-		0x80,  /* analogue_gain_code_global_lsb REG=0x0205 */
-		0x01,  /* coarse_integration_time_msb   REG=0x0202 */
-		0xF0,  /* coarse_integration_time_lsb   REG=0x0203 */
-		 490,  /* size_h*/
-		  27,  /* blk_l*/
-		1304,/*size_w*/
-		1434   /* blk_p*/
-	}
-};
-
-/* 1126 for MIPI */
-struct reg_struct s5k4e1gx_reg_zero_shutter[1] = {
-	{/*Preview, for zero_shutter*/
-		0x04,  /* pre_pll_clk_div               REG=0x0305 */
-		0x00,  /* pll_multiplier_msb            REG=0x0306 */
-		0x66,  /* pll_multiplier_lsb            REG=0x0307 */
-		0x01,  /* vt_sys_clk_div                REG=0x30B5 */
-
-		/* Add for MIPI */
-		0x02,  /* MIPI_data_lane_modes          REG=0x30E2 */
-
-		0xA0,  /* DPHY_bandctrl                 REG=0x30F1 */
-		0x00,  /* read_mode                     REG=0x0101 */
-		0x0A,  /* x_output_size_msb             REG=0x034C */
-		0x30,  /* x_output_size_lsb             REG=0x034D */
-		0x07,  /* y_output_size_msb             REG=0x034E */
-		0xA8,  /* y_output_size_lsb             REG=0x034F */
-		0x01,  /* x_even_inc                    REG=0x0381 */
-		0x01,  /* x_odd_inc                     REG=0x0383 */
-		0x01,  /* y_even_inc                    REG=0x0385 */
-		0x01,  /* y_odd_inc                     REG=0x0387 */
-		0x03,  /* h_binning                     REG=0x30A9 */
-		0xE8,  /* v_binning                     REG=0x300E */
-		0x07,  /* frame_length_lines_msb        REG=0x0340 */
-		0xB4,  /* frame_length_lines_lsb        REG=0x0341 */
-		0x0A,  /* line_length_pck_msb           REG=0x0342 */
-		0xB2,  /* line_length_pck_lsb           REG=0x0343 */
-		0x10,  /* pclk_inv;                     REG=0x3110 */
-		0x0C,  /* pclk_delay;                   REG=0x3117 */
-		0x0A,  /* v_h_strength;                 REG=0x3119 */
-		0xAA,  /* data_pclk_strength;           REG=0x311A */
-		0x82,  /* cds_test                      REG=0x300F */
-		0xC0,  /* rst_offset1                   REG=0x3013 */
-		0xA4,  /* rmp_init                      REG=0x3017 */ /*0x94*/
-		0x88,  /* comp_bias                   REG=0x301B */ /*0x83*/
-		0x00,  /* analogue_gain_code_global_msb REG=0x0204 */
-		0x80,  /* analogue_gain_code_global_lsb REG=0x0205 */
-		0x04,  /* coarse_integration_time_msb   REG=0x0202 */
-		0x12,  /* coarse_integration_time_lsb   REG=0x0203 */
-		1960,  /* size_h*/
-		  12,  /* blk_l*/
-		2608,  /* size_w*/
-		130   /* blk_p*/
-	},
-};
-
 struct reg_struct s5k4e1gx_reg_pat[2] = {
 	{/*Preview*/
 		0x06,  /* pre_pll_clk_div               REG=0x0305 */
 		0x00,  /* pll_multiplier_msb            REG=0x0306 */
-		0x50,  /* pll_multiplier_lsb            REG=0x0307 */
+		0x50,  /* pll_multiplier_lsb            REG=0x0307 */		//0x68,	//0x68
 		0x00,  /* vt_sys_clk_div                REG=0x30B5 */
-
-		/* Add for MIPI */
-		0x02,  /* MIPI_data_lane_modes          REG=0x30E2 */
-
 		0xB0,  /* DPHY_bandctrl                 REG=0x30F1 */
 		0x00,  /* read_mode                     REG=0x0101 */
-		0x05,  /* x_output_size_msb             REG=0x034C */
+		0x05,  /* x_output_size_msb             REG=0x034C */	// Width = 0x0518 = 1304
 		0x18,  /* x_output_size_lsb             REG=0x034D */
-		0x03,  /* y_output_size_msb             REG=0x034E */
+		0x03,  /* y_output_size_msb             REG=0x034E */	// High  = 0x03D4 =  980
 		0xD4,  /* y_output_size_lsb             REG=0x034F */
 		0x01,  /* x_even_inc                    REG=0x0381 */
 		0x01,  /* x_odd_inc                     REG=0x0383 */
@@ -367,10 +213,10 @@ struct reg_struct s5k4e1gx_reg_pat[2] = {
 		0x03,  /* y_odd_inc                     REG=0x0387 */
 		0x02,  /* h_binning                     REG=0x30A9 */
 		0xEB,  /* v_binning                     REG=0x300E */
-		0x03,  /* frame_length_lines_msb        REG=0x0340 */
-		0xE0,  /* frame_length_lines_lsb        REG=0x0341 */
-		0x0A,  /* line_length_pck_msb           REG=0x0342 */
-		0xB2,  /* line_length_pck_lsb           REG=0x0343 */
+		0x03,  /* frame_length_lines_msb        REG=0x0340 */	//0x04,	//0x03,	//0x03,
+		0xE0,  /* frame_length_lines_lsb        REG=0x0341 */	//0x08,	//0xE0,	//0xDE,
+		0x0A,  /* line_length_pck_msb           REG=0x0342 */	//0x0A,	//0x0A,	//0x0A,
+		0xB2,  /* line_length_pck_lsb           REG=0x0343 */	//0xB2,	//0xB2,	//0xAC,
 		0x10,  /* pclk_inv;                     REG=0x3110 */
 		0x0C,  /* pclk_delay;                   REG=0x3117 */
 		0x0A,  /* v_h_strength;                 REG=0x3119 */
@@ -382,21 +228,17 @@ struct reg_struct s5k4e1gx_reg_pat[2] = {
 		0x00,  /* analogue_gain_code_global_msb REG=0x0204 */
 		0x20,  /* analogue_gain_code_global_lsb REG=0x0205 */
 		0x03,  /* coarse_integration_time_msb   REG=0x0202 */
-		0x1F,  /* coarse_integration_time_lsb   REG=0x0203 */
-		 980,  /* size_h*/
-		  12,  /* blk_l*/
-		1304,  /* size_w*/
-		1434   /* blk_p*/
+		0x1F,  /* coarse_intergation_time_lsb   REG=0x0203 */
+		 980,  /* size_h 				   */	// 972,		// 972,
+		  12,  /* blk_l  				   */	//  10,		//  18,
+		1304,  /* size_w 				   */	//1296,		//1296,
+		1434   /* blk_p  				   */	//1442 		//1436,
 	},
 	{ /*Snapshot*/
 		0x06,  /* pre_pll_clk_div               REG=0x0305 */
 		0x00,  /* pll_multiplier_msb            REG=0x0306 */
-		0x50,  /* pll_multiplier_lsb            REG=0x0307 */
+		0x50,  /* pll_multiplier_lsb            REG=0x0307 */		//0x68,	//0x68
 		0x00,  /* vt_sys_clk_div                REG=0x30B5 */
-
-		/* Add for MIPI */
-		0x02,  /* MIPI_data_lane_modes          REG=0x30E2 */
-
 		0xB0,  /* DPHY_bandctrl                 REG=0x30F1 */
 		0x00,  /* read_mode                     REG=0x0101 */
 		0x0A,  /* x_output_size_msb             REG=0x034C */
@@ -409,10 +251,10 @@ struct reg_struct s5k4e1gx_reg_pat[2] = {
 		0x01,  /* y_odd_inc                     REG=0x0387 */
 		0x03,  /* h_binning                     REG=0x30A9 */
 		0xE8,  /* v_binning                     REG=0x300E */
-		0x07,  /* frame_length_lines_msb        REG=0x0340 */
-		0xB4,  /* frame_length_lines_lsb        REG=0x0341 */
-		0x0A,  /* line_length_pck_msb           REG=0x0342 */
-		0xB2,  /* line_length_pck_lsb           REG=0x0343 */
+		0x07,  /* frame_length_lines_msb        REG=0x0340 */	//0x07,	//0x07,	//0x07,
+		0xB4,  /* frame_length_lines_lsb        REG=0x0341 */	//0xF0,	//0xB4,	//0xB6,
+		0x0A,  /* line_length_pck_msb           REG=0x0342 */	//0x0A,	//0x0A,	//0x0A,
+		0xB2,  /* line_length_pck_lsb           REG=0x0343 */ 	//0xB2,	//0xB2,	//0xAC,
 		0x10,  /* pclk_inv;                     REG=0x3110 */
 		0x0C,  /* pclk_delay;                   REG=0x3117 */
 		0x0A,  /* v_h_strength;                 REG=0x3119 */
@@ -424,11 +266,11 @@ struct reg_struct s5k4e1gx_reg_pat[2] = {
 		0x00,  /* analogue_gain_code_global_msb REG=0x0204 */
 		0x80,  /* analogue_gain_code_global_lsb REG=0x0205 */
 		0x07,  /* coarse_integration_time_msb   REG=0x0202 */
-		0xA8,  /* coarse_integration_time_lsb   REG=0x0203 */
-		1960,  /* size_h */
-		  12,  /* blk_l*/
-		2608,  /* size_w*/
-		 130   /* blk_p*/
+		0xA8,  /* coarse_intergation_time_lsb   REG=0x0203 */
+		1960,  /* size_h 				   */	//1960,     //1960,
+		  12,  /* blk_l  				   */   //  72,     //  14,
+		2608,  /* size_w 				   */   //2608,     //2608,
+		 130   /* blk_p  				   */   // 130      // 124,
 	}
 };
 
@@ -455,7 +297,6 @@ struct s5k4e1gx_ctrl {
 	enum msm_s_resolution pict_res;
 	enum msm_s_resolution curr_res;
 	enum msm_s_test_mode  set_test;
-	enum s5k4e1gx_reg_update_t reg_update;
 };
 
 static struct s5k4e1gx_ctrl *s5k4e1gx_ctrl;
@@ -475,7 +316,7 @@ static int i2c_transfer_retry(struct i2c_adapter *adap,
 		ns = i2c_transfer(adap, msgs, len);
 		if (ns == len)
 			break;
-		pr_err("[CAM]%s: try %d/%d: i2c_transfer sent: %d, len %d\n",
+		pr_err("%s: try %d/%d: i2c_transfer sent: %d, len %d\n",
 			__func__,
 			i2c_retry, MAX_I2C_RETRIES, ns, len);
 		msleep(10);
@@ -533,7 +374,7 @@ static int s5k4e1gx_i2c_rxdata(unsigned short saddr, unsigned char *rxdata,
 	};
 
 	if (i2c_transfer_retry(s5k4e1gx_client->adapter, msgs, 2) < 0) {
-		pr_err("[CAM]s5k4e1gx_i2c_rxdata failed!\n");
+		pr_err("s5k4e1gx_i2c_rxdata failed!\n");
 		return -EIO;
 	}
 
@@ -553,7 +394,7 @@ static int32_t s5k4e1gx_i2c_txdata(unsigned short saddr,
 	};
 
 	if (i2c_transfer_retry(s5k4e1gx_client->adapter, msg, 1) < 0) {
-		pr_err("[CAM]s5k4e1gx_i2c_txdata failed\n");
+		pr_err("s5k4e1gx_i2c_txdata failed\n");
 		return -EIO;
 	}
 
@@ -581,7 +422,7 @@ static int32_t s5k4e1gx_i2c_read_b(unsigned short saddr, unsigned short raddr,
 	*rdata = buf[0];
 
 	if (rc < 0)
-		printk("[CAM]s5k4e1gx_i2c_read failed!\n");
+		printk("s5k4e1gx_i2c_read failed!\n");
 
 	return rc;
 }
@@ -600,7 +441,7 @@ static int32_t s5k4e1gx_i2c_write_b(unsigned short saddr, unsigned short waddr,
 	rc = s5k4e1gx_i2c_txdata(saddr, buf, 3);
 
 	if (rc < 0)
-		pr_err("[CAM]i2c_write_b failed, addr = 0x%x, val = 0x%x!\n",
+		pr_err("i2c_write_b failed, addr = 0x%x, val = 0x%x!\n",
 			 waddr, bdata);
 
 	return rc;
@@ -643,7 +484,7 @@ static int32_t s5k4e1gx_i2c_read_w(unsigned short saddr, unsigned short raddr,
 	*rdata = buf[0] << 8 | buf[1];
 
 	if (rc < 0)
-		pr_err("[CAM]s5k4e1gx_i2c_read failed!\n");
+		pr_err("s5k4e1gx_i2c_read failed!\n");
 
 	return rc;
 }
@@ -674,7 +515,7 @@ static int s5k4e1gx_probe_init_sensor(const struct msm_camera_sensor_info *data)
 
 	mdelay(20);
 
-	pr_info("[CAM]s5k4e1gx_sensor_init(): reseting sensor.\n");
+	pr_info("s5k4e1gx_sensor_init(): reseting sensor.\n");
 
 	rc = s5k4e1gx_i2c_read_w(s5k4e1gx_client->addr,
 		S5K4E1GX_REG_MODEL_ID, &chipid);
@@ -682,26 +523,20 @@ static int s5k4e1gx_probe_init_sensor(const struct msm_camera_sensor_info *data)
 		goto init_probe_fail;
 
 	if (chipid != S5K4E1GX_MODEL_ID) {
-		pr_err("[CAM]S5K4E1GX wrong model_id = 0x%x\n", chipid);
+		pr_err("S5K4E1GX wrong model_id = 0x%x\n", chipid);
 		rc = -ENODEV;
 		goto init_probe_fail;
 	}
 
-	/*Reset sensor*/
-	if (sdata->csi_if) {
-		rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr,
-			S5K4E1GX_MIPI_REG_SOFTWARE_RESET, S5K4E1GX_MIPI_SOFTWARE_RESET);
-	} else {
-		rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr,
+    /*Reset sensor*/
+	rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr,
 			S5K4E1GX_REG_SOFTWARE_RESET, S5K4E1GX_SOFTWARE_RESET);
-	}
-
 	if (rc < 0)
 		goto init_probe_fail;
 
 	/* Add Lens Correction Common Setting For Maverick*/
 	if (!sdata->sensor_lc_disable) {
-		pr_info("[CAM]sensor_lc_disable=%d\n", sdata->sensor_lc_disable);
+		pr_info("sensor_lc_disable=%d\n", sdata->sensor_lc_disable);
 
 		rc = s5k4e1gx_i2c_write_table(s5k4e1gx_regs.lc_common,
 			s5k4e1gx_regs.lc_common_size);
@@ -712,54 +547,20 @@ static int s5k4e1gx_probe_init_sensor(const struct msm_camera_sensor_info *data)
     /* Add analog settings For Maverick*/
 	rc = s5k4e1gx_i2c_read_b(s5k4e1gx_client->addr, S5K4E1GX_REVISION_ID, &evt_ver);
 	if (!(rc < 0)) {
-		printk("[CAM]sensor evt version : 0x%x\n", evt_ver);
+		printk("sensor evt version : 0x%x\n", evt_ver);
 		if (evt_ver == S5K4E1GX_REVISION_EVT3)
 			sensor_evt_ver = 3;
 	}
 
-
-
     /* Modified the Setting for different sensor revision */
-	if (machine_is_saga()) {
-		printk("[CAM]use analog_settings_saga\n");
-		if (sdata->zero_shutter_mode)
-		rc = s5k4e1gx_i2c_write_table(
-			s5k4e1gx_regs.analog_settings_saga_zero_shutter,
-			s5k4e1gx_regs.analog_settings_saga_zero_shutter_size);
-		else
-		rc = s5k4e1gx_i2c_write_table(s5k4e1gx_regs.analog_settings_saga,
-				s5k4e1gx_regs.analog_settings_saga_size);
-		if (rc < 0)
-			goto init_probe_fail;
-
-
-		s5k4e1gx_reg_cand[0].comp_bias = 0x83;
-		s5k4e1gx_reg_cand[1].comp_bias = 0x83;
-		s5k4e1gx_reg_pat[S_RES_PREVIEW].comp_bias = 0x83;
-		s5k4e1gx_reg_pat[S_RES_CAPTURE].comp_bias = 0x75;
-
-		s5k4e1gx_reg_cand[0].pll_multiplier_lsb = 0x65;
-		s5k4e1gx_reg_cand[1].pll_multiplier_lsb = 0x65;
-		s5k4e1gx_reg_pat[S_RES_PREVIEW].pll_multiplier_lsb = 0x65;
-		s5k4e1gx_reg_pat[S_RES_CAPTURE].pll_multiplier_lsb = 0x65;
-
-		s5k4e1gx_reg_cand[0].vt_sys_clk_div = 0x01;
-		s5k4e1gx_reg_cand[1].vt_sys_clk_div = 0x01;
-		s5k4e1gx_reg_pat[S_RES_PREVIEW].vt_sys_clk_div = 0x01;
-		s5k4e1gx_reg_pat[S_RES_CAPTURE].vt_sys_clk_div = 0x01;
-
-		s5k4e1gx_reg_cand[0].DPHY_bandctrl = 0xA0;
-		s5k4e1gx_reg_cand[1].DPHY_bandctrl = 0xA0;
-		s5k4e1gx_reg_pat[S_RES_PREVIEW].DPHY_bandctrl = 0xA0;
-		s5k4e1gx_reg_pat[S_RES_CAPTURE].DPHY_bandctrl = 0xA0;
-	} else if (sensor_evt_ver == 3) {
-		printk("[CAM]use analog_settings_evt3\n");
+	if (sensor_evt_ver == 3) {
+		printk("use analog_settings_evt3\n");
 		rc = s5k4e1gx_i2c_write_table(s5k4e1gx_regs.analog_settings_evt3,
 				s5k4e1gx_regs.analog_settings_evt3_size);
 		if (rc < 0)
 			goto init_probe_fail;
 	} else {
-		printk("[CAM]use analog_settings_evt2\n");
+		printk("use analog_settings_evt2\n");
 		rc = s5k4e1gx_i2c_write_table(s5k4e1gx_regs.analog_settings_evt2,
 				s5k4e1gx_regs.analog_settings_evt2_size);
 		if (rc < 0)
@@ -771,18 +572,6 @@ static int s5k4e1gx_probe_init_sensor(const struct msm_camera_sensor_info *data)
 		s5k4e1gx_reg_pat[S_RES_PREVIEW].rst_offset1 	= 0x90;
 		s5k4e1gx_reg_pat[S_RES_PREVIEW].rmp_init	= 0x84;
 		s5k4e1gx_reg_pat[S_RES_PREVIEW].comp_bias	= 0x77;
-
-		s5k4e1gx_reg_cand[0].DPHY_bandctrl   = 0xD0;
-		s5k4e1gx_reg_cand[1].DPHY_bandctrl   = 0xD0;
-		s5k4e1gx_reg_cand[0].cds_test 	= 0x00;
-		s5k4e1gx_reg_cand[1].cds_test 	= 0x00;
-		s5k4e1gx_reg_cand[0].rst_offset1 	= 0x90;
-		s5k4e1gx_reg_cand[1].rst_offset1 	= 0x90;
-		s5k4e1gx_reg_cand[0].rmp_init	= 0x84;
-		s5k4e1gx_reg_cand[1].rmp_init	= 0x84;
-		s5k4e1gx_reg_cand[0].comp_bias	= 0x77;
-		s5k4e1gx_reg_cand[1].comp_bias	= 0x77;
-
 	    // Snapshot Analog Setting for EVT2
 		s5k4e1gx_reg_pat[S_RES_CAPTURE].DPHY_bandctrl   = 0xD0;
 		s5k4e1gx_reg_pat[S_RES_CAPTURE].cds_test 	= 0x00;
@@ -799,36 +588,20 @@ static int s5k4e1gx_probe_init_sensor(const struct msm_camera_sensor_info *data)
 	s5k4e1gx_reg_pat[S_RES_PREVIEW].read_mode = 0;
 	s5k4e1gx_reg_pat[S_RES_CAPTURE].read_mode = 0;
 
-	s5k4e1gx_reg_cand[0].v_h_strength = 0x0F; /* 0x0A; */
-	s5k4e1gx_reg_cand[1].v_h_strength = 0x0F; /* 0x0A; */
-	s5k4e1gx_reg_cand[0].data_pclk_strength = 0xFA; /* 0xEA; */
-	s5k4e1gx_reg_cand[1].data_pclk_strength = 0xFA; /* 0xEA; */
-	s5k4e1gx_reg_cand[0].read_mode = 0;
-	s5k4e1gx_reg_cand[1].read_mode = 0;
-
   if (machine_is_lexikon()) {
     s5k4e1gx_reg_pat[S_RES_PREVIEW].read_mode = S5K4E1GX_READ_MIRROR_FLIP;
     s5k4e1gx_reg_pat[S_RES_CAPTURE].read_mode = S5K4E1GX_READ_MIRROR_FLIP;
-    s5k4e1gx_reg_cand[0].read_mode = S5K4E1GX_READ_MIRROR_FLIP;
-    s5k4e1gx_reg_cand[1].read_mode = S5K4E1GX_READ_MIRROR_FLIP;
   }
 
 #ifdef CONFIG_ARCH_MSM7227
     /* Individual Setting for Each Project */
 	if (machine_is_latte()) {
-		s5k4e1gx_reg_pat[S_RES_PREVIEW].pclk_delay = 0x0E; 	/* Kevin add to enhance setup time */
-		s5k4e1gx_reg_pat[S_RES_CAPTURE].pclk_delay = 0x0E; 	/* Kevin add to enhance setup time */
-		s5k4e1gx_reg_pat[S_RES_PREVIEW].v_h_strength 	= 0x0F;	/* Kevin add to enhance setup time */
-		s5k4e1gx_reg_pat[S_RES_CAPTURE].v_h_strength 	= 0x0F;	/* Kevin add to enhance setup time */
+		s5k4e1gx_reg_pat[S_RES_PREVIEW].pclk_delay = 0x0E; 	//Kevin add to enhance setup time
+		s5k4e1gx_reg_pat[S_RES_CAPTURE].pclk_delay = 0x0E; 	//Kevin add to enhance setup time
+		s5k4e1gx_reg_pat[S_RES_PREVIEW].v_h_strength 	= 0x0F;	//Kevin add to enhance setup time
+		s5k4e1gx_reg_pat[S_RES_CAPTURE].v_h_strength 	= 0x0F;	//Kevin add to enhance setup time
 		s5k4e1gx_reg_pat[S_RES_PREVIEW].data_pclk_strength = 0xFA;
 		s5k4e1gx_reg_pat[S_RES_CAPTURE].data_pclk_strength = 0xFA;
-
-		s5k4e1gx_reg_cand[0].pclk_delay = 0x0E; 	/* Kevin add to enhance setup time */
-		s5k4e1gx_reg_cand[1].pclk_delay = 0x0E; 	/* Kevin add to enhance setup time */
-		s5k4e1gx_reg_cand[0].v_h_strength 	= 0x0F;	/* Kevin add to enhance setup time */
-		s5k4e1gx_reg_cand[1].v_h_strength 	= 0x0F;	/* Kevin add to enhance setup time */
-		s5k4e1gx_reg_cand[0].data_pclk_strength = 0xFA;
-		s5k4e1gx_reg_cand[1].data_pclk_strength = 0xFA;
 	}
 
 	if (machine_is_liberty()) {
@@ -838,20 +611,13 @@ static int s5k4e1gx_probe_init_sensor(const struct msm_camera_sensor_info *data)
 		s5k4e1gx_reg_pat[S_RES_CAPTURE].data_pclk_strength = 0xFA; /* 0xEA; */
 		s5k4e1gx_reg_pat[S_RES_PREVIEW].read_mode = S5K4E1GX_READ_MIRROR_FLIP;
 		s5k4e1gx_reg_pat[S_RES_CAPTURE].read_mode = S5K4E1GX_READ_MIRROR_FLIP;
-
-		s5k4e1gx_reg_cand[0].v_h_strength = 0x0F; /* 0x0A; */
-		s5k4e1gx_reg_cand[1].v_h_strength = 0x0F; /* 0x0A; */
-		s5k4e1gx_reg_cand[0].data_pclk_strength = 0xFA; /* 0xEA; */
-		s5k4e1gx_reg_cand[1].data_pclk_strength = 0xFA; /* 0xEA; */
-		s5k4e1gx_reg_cand[0].read_mode = S5K4E1GX_READ_MIRROR_FLIP;
-		s5k4e1gx_reg_cand[1].read_mode = S5K4E1GX_READ_MIRROR_FLIP;
 	}
 #endif
 
-	if (data->camera_clk_switch != NULL) {
+	if (machine_is_glacier()) {
 	rc = s5k4e1gx_i2c_read_b(s5k4e1gx_client->addr, 0x3110, &reg_status);
 		if (rc < 0) {
-			pr_info("[CAM]%s: 0x3110 read_b fail\n", __func__);
+			pr_info("%s: 0x3110 read_b fail\n", __func__);
 			goto init_probe_fail;
 		}
 
@@ -861,11 +627,12 @@ static int s5k4e1gx_probe_init_sensor(const struct msm_camera_sensor_info *data)
 				0x3110, reg_status);
 
 		if (rc < 0) {
-			pr_info("[CAM]%s: 0x3110 write_b fail\n", __func__);
+			pr_info("%s: 0x3110 write_b fail\n", __func__);
 			goto init_probe_fail;
 		}
 	}
 
+    /* Horng add this 980928 */
 	rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr,
 			S5K4E1GX_REG_MODE_SELECT, S5K4E1GX_MODE_SELECT_SW_STANDBY);
 	if (rc < 0)
@@ -919,16 +686,16 @@ static int s5k4e1gx_i2c_probe(struct i2c_client *client,
 	const struct i2c_device_id *id)
 {
 	int rc = 0;
-	pr_info("[CAM]s5k4e1gx_probe called!\n");
+	pr_info("s5k4e1gx_probe called!\n");
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
-		pr_err("[CAM]i2c_check_functionality failed\n");
+		pr_err("i2c_check_functionality failed\n");
 		goto probe_failure;
 	}
 
 	s5k4e1gx_sensorw = kzalloc(sizeof(struct s5k4e1gx_work), GFP_KERNEL);
 	if (!s5k4e1gx_sensorw) {
-		pr_err("[CAM]kzalloc failed.\n");
+		pr_err("kzalloc failed.\n");
 		rc = -ENOMEM;
 		goto probe_failure;
 	}
@@ -939,24 +706,28 @@ static int s5k4e1gx_i2c_probe(struct i2c_client *client,
 
 	mdelay(50);
 
-	pr_info("[CAM]s5k4e1gx_probe successed! rc = %d\n", rc);
+	pr_info("s5k4e1gx_probe successed! rc = %d\n", rc);
 	return 0;
 
 probe_failure:
-	pr_err("[CAM]s5k4e1gx_probe failed! rc = %d\n", rc);
+	pr_err("s5k4e1gx_probe failed! rc = %d\n", rc);
 	return rc;
 }
-
+/*
 static int __exit s5k4e1gx_i2c_remove(struct i2c_client *client)
 {
 	struct s5k4e1gx_work_t *sensorw = i2c_get_clientdata(client);
+
+	printk("s5k4e1gx_i2c_remove()\n");
+	
 	free_irq(client->irq, sensorw);
-	deinit_suspend();
+        deinit_suspend();
+	i2c_detach_client(client);
 	s5k4e1gx_client = NULL;
 	kfree(sensorw);
 	return 0;
 }
-
+*/
 static struct i2c_driver s5k4e1gx_i2c_driver = {
 	.id_table = s5k4e1gx_i2c_id,
 	.probe  = s5k4e1gx_i2c_probe,
@@ -979,69 +750,15 @@ static int32_t s5k4e1gx_test(enum msm_s_test_mode mo)
 	return rc;
 }
 
-
-
-static void s5k4e1gx_extra_settings_for_mipi(enum msm_s_setting rt)
-{
-	if (machine_is_saga()) {
-		if (rt == S_RES_PREVIEW) {
-			/* outif_enable[7], data_type[5:0](2Bh = bayer 10bit) */
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30BF, 0xAB);
-			/* video_offset[7:4] 3260%12 */
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30C0, 0xA0);
-			/* video_data_length 1600 = 1304 * 1.25 */
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30C8, 0x06);
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30C9, 0x5E);
-
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30E3, 0x38);
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30E4, 0x40);
-		} else {
-			/* outif_enable[7], data_type[5:0](2Bh = bayer 10bit) */
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30BF, 0xAB);
-			/* video_offset[7:4] 3260%12 */
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30C0, 0x80);
-			/* video_data_length 3260 = 2608 * 1.25 */
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30C8, 0x0C);
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30C9, 0xBC);
-
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30E3, 0x19);
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30E4, 0x64);
-			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30E5, 0xF0);
-		}
-	}
-}
-
-
 static int32_t s5k4e1gx_setting(enum msm_s_reg_update rupdate,
 				enum msm_s_setting rt)
 {
 	int32_t rc = 0;
 	uint16_t num_lperf;
-	struct msm_camera_csi_params s5k4e1gx_csi_params;
 	struct msm_camera_sensor_info *sdata = s5k4e1_pdev->dev.platform_data;
-
-	if (sdata->csi_if) {
-		if (s5k4e1gx_ctrl->reg_update == S_REG_INIT) {
-			/* config mipi csi controller */
-			s5k4e1gx_csi_params.data_format = CSI_10BIT;
-			s5k4e1gx_csi_params.lane_cnt = 2;
-			s5k4e1gx_csi_params.lane_assign = 0xe4;
-			s5k4e1gx_csi_params.dpcm_scheme = 0;
-			s5k4e1gx_csi_params.settle_cnt = 30;/*0120: QCT //20;*/
-			rc = msm_camio_csi_config(&s5k4e1gx_csi_params);
-
-			s5k4e1gx_ctrl->reg_update = S_UPDATE_PERIODIC;
-		}
-	}
 
 	switch (rupdate) {
 	case S_UPDATE_PERIODIC:
-		/* 1126 for improve shutter of MIPI */
-		if (machine_is_saga() && sdata->zero_shutter_mode) {
-		pr_info("[CAM]%s:return 0 (S_UPDATE_PERIODIC state)\n", __func__);
-			return 0;
-		}
-
 		if (rt == S_RES_PREVIEW || rt == S_RES_CAPTURE) {
 			struct s5k4e1gx_i2c_reg_conf tbl_1[] = {
 			{
@@ -1111,13 +828,9 @@ static int32_t s5k4e1gx_setting(enum msm_s_reg_update rupdate,
 			if (rc < 0)
 				return rc;
 
-			if (sdata->csi_if) {
-				s5k4e1gx_extra_settings_for_mipi(rt);
-			}
-
 			/* Lens Correction for Preview or Capture */
 		if (!sdata->sensor_lc_disable) {
-		pr_info("[CAM]sensor_lc_disable=%d\n", sdata->sensor_lc_disable);
+		pr_info("sensor_lc_disable=%d\n", sdata->sensor_lc_disable);
 			if (rt == S_RES_PREVIEW) {
 			rc = s5k4e1gx_i2c_write_table(s5k4e1gx_regs.lc_preview,
 					s5k4e1gx_regs.lc_preview_size);
@@ -1249,77 +962,6 @@ static int32_t s5k4e1gx_setting(enum msm_s_reg_update rupdate,
 
 			};	/* end of struct s5k4e1gx_i2c_reg_conf tbl_3[] */
 
-			/* 1126 for improve shutter of MIPI */
-		struct s5k4e1gx_i2c_reg_conf tbl_4[] =
-		{
-			     /* PLL setting */
-			{REG_PRE_PLL_CLK_DIV,
-			s5k4e1gx_reg_zero_shutter[rt].pre_pll_clk_div},
-			{REG_PLL_MULTIPLIER_MSB,
-			s5k4e1gx_reg_zero_shutter[rt].pll_multiplier_msb},
-			{REG_PLL_MULTIPLIER_LSB,
-			s5k4e1gx_reg_zero_shutter[rt].pll_multiplier_lsb},
-			{REG_VT_SYS_CLK_DIV,
-			s5k4e1gx_reg_zero_shutter[rt].vt_sys_clk_div},
-			{REG_MIPI_LANE_MODE,
-			s5k4e1gx_reg_zero_shutter[rt].MIPI_data_lane_modes},
-			{REG_DPHY_BANDCTRL,
-			s5k4e1gx_reg_zero_shutter[rt].DPHY_bandctrl},
-			/* Read Mode Setting */
-			{S5K4E1GX_REG_READ_MODE,
-			s5k4e1gx_reg_pat[rt].read_mode},
-			/* Output Size */
-			{REG_X_OUTPUT_SIZE_MSB,
-			s5k4e1gx_reg_zero_shutter[rt].x_output_size_msb},
-			{REG_X_OUTPUT_SIZE_LSB,
-			s5k4e1gx_reg_zero_shutter[rt].x_output_size_lsb},
-			{REG_Y_OUTPUT_SIZE_MSB,
-			s5k4e1gx_reg_zero_shutter[rt].y_output_size_msb},
-			{REG_Y_OUTPUT_SIZE_LSB,
-			s5k4e1gx_reg_zero_shutter[rt].y_output_size_lsb},
-
-			 /* Binning */
-			{REG_X_EVEN_INC,
-			s5k4e1gx_reg_pat[rt].x_even_inc},
-			{REG_X_ODD_INC,
-			s5k4e1gx_reg_pat[rt].x_odd_inc },
-			{REG_Y_EVEN_INC,
-			s5k4e1gx_reg_pat[rt].y_even_inc},
-			{REG_Y_ODD_INC,
-			s5k4e1gx_reg_zero_shutter[rt].y_odd_inc},
-			{REG_H_BINNING,
-			s5k4e1gx_reg_zero_shutter[rt].h_binning},
-			{REG_V_BINNING,
-			s5k4e1gx_reg_zero_shutter[rt].v_binning},
-			/* Frame format */
-			{REG_FRAME_LENGTH_LINES_MSB,
-			s5k4e1gx_reg_zero_shutter[rt].frame_length_lines_msb},
-			{REG_FRAME_LENGTH_LINES_LSB,
-			s5k4e1gx_reg_zero_shutter[rt].frame_length_lines_lsb},
-			{REG_LINE_LENGTH_PCK_MSB,
-			s5k4e1gx_reg_zero_shutter[rt].line_length_pck_msb},
-			{REG_LINE_LENGTH_PCK_LSB,
-			s5k4e1gx_reg_zero_shutter[rt].line_length_pck_lsb},
-			/* Integration Setting */
-			{REG_ANALOGUE_GAIN_CODE_GLOBAL_MSB,
-		s5k4e1gx_reg_zero_shutter[rt].analogue_gain_code_global_msb},
-			{REG_ANALOGUE_GAIN_CODE_GLOBAL_LSB,
-		s5k4e1gx_reg_zero_shutter[rt].analogue_gain_code_global_lsb},
-			{REG_COARSE_INTEGRATION_TIME_MSB,
-		s5k4e1gx_reg_zero_shutter[rt].coarse_integration_time_msb},
-			{REG_COARSE_INTEGRATION_TIME_LSB,
-		s5k4e1gx_reg_zero_shutter[rt].coarse_integration_time_lsb},
-
-			/* other MIPI setting */
-			/* outif_enable[7], data_type[5:0](2Bh = bayer 10bit) */
-			{0x30BF, 0xAB},
-			/* video_offset[7:4] 3260%12 */
-			{0x30C0, 0x80},
-			/* video_data_length 3260 = 2608 * 1.25 */
-			{0x30C8, 0x0C},
-			{0x30C9, 0xBC},
-		};	/* end of struct s5k4e1gx_i2c_reg_conf tbl_4[] */
-
 		    /* Standby */
 			rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr,
 					S5K4E1GX_REG_MODE_SELECT,
@@ -1327,58 +969,14 @@ static int32_t s5k4e1gx_setting(enum msm_s_reg_update rupdate,
 				if (rc < 0)
 					return rc;
 
-
-			if (sdata->csi_if) {
-				 /* 1126 for improve shutter of MIPI */
-			  if (!sdata->zero_shutter_mode)
-				s5k4e1gx_extra_settings_for_mipi(rt);
-			  else
-				pr_info("[CAM]%s: improve shutter lag\n", __func__);
-			} else {
-				/*awii: for the analog*/
-				if (fps_mode_sel == 1) {
-					s5k4e1gx_i2c_write_b
-						(s5k4e1gx_client->addr, 0x30BC, 0xB0);
-					s5k4e1gx_i2c_write_b
-						(s5k4e1gx_client->addr, 0x302B, 0x01);
-					s5k4e1gx_i2c_write_b
-						(s5k4e1gx_client->addr, 0x30BE, 0x1A);
-				} else {
-					s5k4e1gx_i2c_write_b
-						(s5k4e1gx_client->addr, 0x302B, 0x00);
-					s5k4e1gx_i2c_write_b
-						(s5k4e1gx_client->addr, 0x30BC, 0xA0);
-					s5k4e1gx_i2c_write_b
-						(s5k4e1gx_client->addr, 0x30BE, 0x08);
-				}
-			}
-
 		    /* Write Setting Table */
-			/* 1126 for improve shutter of MIPI */
-			if (sdata->csi_if && sdata->zero_shutter_mode) {
-			pr_info("[CAM]s5k4e1gx_setting(): setup tb1_4\n");
-			rc = s5k4e1gx_i2c_write_table(&tbl_4[0],
-					ARRAY_SIZE(tbl_4));
-			} else {
 			rc = s5k4e1gx_i2c_write_table(&tbl_3[0],
 					ARRAY_SIZE(tbl_3));
 				if (rc < 0)
 					return rc;
-			}
 
-			/* Streaming ON */
-			/* 1126 for improve shutter of MIPI */
-			if (!sdata->csi_if)
+		    /* Streaming ON */
 			s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x3110, 0x10);
-
-#ifdef CONFIG_MSM_CAMERA_7X30
-	/*only streaming on in preview mode and zero_shutter_mode on MIPI*/
-	if (rt == S_RES_PREVIEW && sdata->csi_if && sdata->zero_shutter_mode) {
-		pr_info("[CAM]%s: delay 200ms before Streaming ON\n", __func__);
-		mdelay(200);
-	}
-#endif
-
 			rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr,
 					S5K4E1GX_REG_MODE_SELECT,
 					S5K4E1GX_MODE_SELECT_STREAM);
@@ -1412,41 +1010,44 @@ static int s5k4e1gx_i2c_read_fuseid(struct sensor_cfg_data *cdata)
 
 	int32_t  rc;
 	unsigned short i, R1, R2, R3;
-	unsigned short  OTP[10] = {0};
+	unsigned short  OTP[10];
 
-	pr_info("[CAM]%s: sensor OTP information:\n", __func__);
+	pr_info("%s: sensor OTP information:\n", __func__);
+
+	for (i = 0; i < 10; i++)
+		OTP[i] = 5;
 
 	rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30F9, 0x0E);
 	if (rc < 0)
-		pr_info("[CAM]%s: i2c_write_b 0x30F9 fail\n", __func__);
+		pr_info("%s: i2c_write_b 0x30F9 fail\n", __func__);
 
 	rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30FA, 0x0A);
 	if (rc < 0)
-		pr_info("[CAM]%s: i2c_write_b 0x30FA fail\n", __func__);
+		pr_info("%s: i2c_write_b 0x30FA fail\n", __func__);
 
 	rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30FB, 0x71);
 	if (rc < 0)
-		pr_info("[CAM]%s: i2c_write_b 0x30FB fail\n", __func__);
+		pr_info("%s: i2c_write_b 0x30FB fail\n", __func__);
 
 	rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x30FB, 0x70);
 	if (rc < 0)
-		pr_info("[CAM]%s: i2c_write_b 0x30FB fail\n", __func__);
+		pr_info("%s: i2c_write_b 0x30FB fail\n", __func__);
 
 	mdelay(4);
 
 	for (i = 0; i < 10; i++) {
 		rc = s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x310C, i);
 			if (rc < 0)
-			pr_info("[CAM]%s: i2c_write_b 0x310C fail\n", __func__);
+			pr_info("%s: i2c_write_b 0x310C fail\n", __func__);
 		rc = s5k4e1gx_i2c_read_b(s5k4e1gx_client->addr, 0x310F, &R1);
 			if (rc < 0)
-			pr_info("[CAM]%s: i2c_read_b 0x310F fail\n", __func__);
+			pr_info("%s: i2c_read_b 0x310F fail\n", __func__);
 		rc = s5k4e1gx_i2c_read_b(s5k4e1gx_client->addr, 0x310E, &R2);
 			if (rc < 0)
-			pr_info("[CAM]%s: i2c_read_b 0x310E fail\n", __func__);
+			pr_info("%s: i2c_read_b 0x310E fail\n", __func__);
 		rc = s5k4e1gx_i2c_read_b(s5k4e1gx_client->addr, 0x310D, &R3);
 			if (rc < 0)
-			pr_info("[CAM]%s: i2c_read_b 0x310D fail\n", __func__);
+			pr_info("%s: i2c_read_b 0x310D fail\n", __func__);
 
 		if ((R3&0x0F) != 0)
 			OTP[i] = (short)(R3&0x0F);
@@ -1460,9 +1061,9 @@ static int s5k4e1gx_i2c_read_fuseid(struct sensor_cfg_data *cdata)
 			OTP[i] = (short)(R1>>4);
 
 	}
-	pr_info("[CAM]%s: VenderID=%x,LensID=%x,SensorID=%x%x\n", __func__,
+	pr_info("%s: VenderID=%x,LensID=%x,SensorID=%x%x\n", __func__,
 		OTP[0], OTP[1], OTP[2], OTP[3]);
-	pr_info("[CAM]%s: ModuleFuseID= %x%x%x%x%x%x\n", __func__,
+	pr_info("%s: ModuleFuseID= %x%x%x%x%x%x\n", __func__,
 		OTP[4], OTP[5], OTP[6], OTP[7], OTP[8], OTP[9]);
 
     cdata->cfg.fuse.fuse_id_word1 = 0;
@@ -1476,42 +1077,23 @@ static int s5k4e1gx_i2c_read_fuseid(struct sensor_cfg_data *cdata)
 		(OTP[8]<<4) |
 		(OTP[9]);
 
-	pr_info("[CAM]s5k4e1gx: fuse->fuse_id_word1:%d\n",
+	pr_info("s5k4e1gx: fuse->fuse_id_word1:%d\n",
 		cdata->cfg.fuse.fuse_id_word1);
-	pr_info("[CAM]s5k4e1gx: fuse->fuse_id_word2:%d\n",
+	pr_info("s5k4e1gx: fuse->fuse_id_word2:%d\n",
 		cdata->cfg.fuse.fuse_id_word2);
-	pr_info("[CAM]s5k4e1gx: fuse->fuse_id_word3:0x%08x\n",
+	pr_info("s5k4e1gx: fuse->fuse_id_word3:0x%08x\n",
 		cdata->cfg.fuse.fuse_id_word3);
-	pr_info("[CAM]s5k4e1gx: fuse->fuse_id_word4:0x%08x\n",
+	pr_info("s5k4e1gx: fuse->fuse_id_word4:0x%08x\n",
 		cdata->cfg.fuse.fuse_id_word4);
 	return 0;
 }
 static int s5k4e1gx_sensor_open_init(struct msm_camera_sensor_info *data)
 {
 	int32_t  rc;
-	int16_t toUseCand;
-	struct msm_camera_sensor_info *sinfo = s5k4e1_pdev->dev.platform_data;
 
-	if (fps_mode_sel == 1) {
-		pr_info("[CAM]s5k4e1gx_setting PREVIEW AT 60FPS THIS TIME\n");
-		toUseCand = 1;
-	} else {
-		pr_info("[CAM]s5k4e1gx_setting PREVIEW AT normal\n");
-		toUseCand = 0;
-	}
-
-	/* 1126 for improve shutter of MIPI */
-	if (machine_is_saga()) {
-	pr_info("[CAM]%s: get s5k4e1gx_reg_zero_shutter setting\n", __func__);
-	memcpy(&(s5k4e1gx_reg_pat[S_RES_PREVIEW]),
-		&(s5k4e1gx_reg_zero_shutter[0]), sizeof(struct reg_struct));
-	} else {
-	memcpy(&(s5k4e1gx_reg_pat[S_RES_PREVIEW]),
-		&(s5k4e1gx_reg_cand[toUseCand]), sizeof(struct reg_struct));
-	}
 	s5k4e1gx_ctrl = kzalloc(sizeof(struct s5k4e1gx_ctrl), GFP_KERNEL);
 	if (!s5k4e1gx_ctrl) {
-		pr_err("[CAM]s5k4e1gx_init failed!\n");
+		pr_err("s5k4e1gx_init failed!\n");
 		rc = -ENOMEM;
 		goto init_done;
 	}
@@ -1521,59 +1103,37 @@ static int s5k4e1gx_sensor_open_init(struct msm_camera_sensor_info *data)
 	s5k4e1gx_ctrl->set_test = S_TEST_OFF;
 	s5k4e1gx_ctrl->prev_res = S_QTR_SIZE;
 	s5k4e1gx_ctrl->pict_res = S_FULL_SIZE;
-	s5k4e1gx_ctrl->reg_update = REG_INIT;
 
 	if (data)
 		s5k4e1gx_ctrl->sensordata = data;
 
-	/* 1126 for improve shutter of MIPI */
-	if (data->csi_if && data->zero_shutter_mode) {
-		pr_info("[CAM]%s: set prev_res = S_FULL_SIZE\n", __func__);
-		s5k4e1gx_ctrl->prev_res = S_FULL_SIZE;
-	}
 
+	if (machine_is_glacier()) {
 	/*switch PCLK and MCLK to Main cam*/
-	if (data && data->camera_clk_switch != NULL) {
-		pr_info("[CAM]%s: switch clk\n", __func__);
+	pr_info("%s: switch clk\n", __func__);
+	if (data->camera_clk_switch != NULL)
 		data->camera_clk_switch();
-		msleep(10);
+	msleep(10);
 
-		/* Configure CAM GPIO ON (CAM_MCLK)*/
-		pr_info("[CAM]%s msm_camio_probe_on()\n", __func__);
-		msm_camio_probe_on(s5k4e1_pdev);
+	/* Configure CAM GPIO ON (CAM_MCLK)*/
+	pr_info("%s msm_camio_probe_on()\n", __func__);
+	msm_camio_probe_on(s5k4e1_pdev);
 	}
 
 	/* enable mclk first */
 	msm_camio_clk_rate_set(24000000);
+	mdelay(20);
 
-
-	/* Force reset MIPI sensor for SAGA */
-	/*1126 for improve shutter of MIPI*/
-	if (machine_is_saga() && !data->zero_shutter_mode) {
-		rc = s5k4e1gx_probe_init_sensor(data);
-		if (rc < 0)
-			printk("[CAM]s5k4e1gx_sensor_open_init() call s5k4e1gx_probe_init_sensor() failed !!!\n");
-	}
-
-
-	/* for parallel interface */
-	if (!sinfo->csi_if) {
-		mdelay(20);
-		msm_camio_camif_pad_reg_reset();
-		mdelay(20);
-	}
+	msm_camio_camif_pad_reg_reset();
+	mdelay(20);
 
 	if (s5k4e1gx_ctrl->prev_res == S_QTR_SIZE)
 		rc = s5k4e1gx_setting(S_REG_INIT, S_RES_PREVIEW);
-	else {/*1126 for improve shutter of MIPI*/
-		if (machine_is_saga() && sinfo->zero_shutter_mode)
-			rc = s5k4e1gx_setting(S_REG_INIT, S_RES_PREVIEW);
-		else
-			rc = s5k4e1gx_setting(S_REG_INIT, S_RES_CAPTURE);
-	}
+	else
+		rc = s5k4e1gx_setting(S_REG_INIT, S_RES_CAPTURE);
 
 	if (rc < 0) {
-		pr_err("[CAM]s5k4e1gx_setting failed. rc = %d\n", rc);
+		pr_err("s5k4e1gx_setting failed. rc = %d\n", rc);
 		goto init_fail1;
 	}
 
@@ -1602,15 +1162,14 @@ init_done:
 static int32_t s5k4e1gx_power_down(void)
 {
 	int32_t rc = 0;
-	struct msm_camera_sensor_info *sdata = s5k4e1_pdev->dev.platform_data;
 
+	/* Horng add this 980928 */
+#if 1
 	s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, S5K4E1GX_REG_MODE_SELECT, S5K4E1GX_MODE_SELECT_SW_STANDBY);
 	mdelay(110);
-
-	if (!sdata->csi_if) {
 	s5k4e1gx_i2c_write_b(s5k4e1gx_client->addr, 0x3110, 0x11);
 	mdelay(120);
-	}
+#endif
 
 	return rc;
 }
@@ -1618,16 +1177,17 @@ static int32_t s5k4e1gx_power_down(void)
 static int s5k4e1gx_sensor_release(void)
 {
 	int rc = -EBADF;
-	struct msm_camera_sensor_info *sdata = s5k4e1_pdev->dev.platform_data;
 
 	mutex_lock(&s5k4e1gx_mutex);
-	/*SW stand by*/
+
 	s5k4e1gx_power_down();
-	/*HW stand by*/
+
 	if (s5k4e1gx_ctrl) {
 		gpio_request(s5k4e1gx_ctrl->sensordata->vcm_pwd, "s5k4e1gx");
 		gpio_direction_output(s5k4e1gx_ctrl->sensordata->vcm_pwd, 0);
 		gpio_free(s5k4e1gx_ctrl->sensordata->vcm_pwd);
+
+		gpio_free(s5k4e1gx_ctrl->sensordata->sensor_reset);
 	}
 
 	if (s5k4e1gx_ctrl) {
@@ -1637,24 +1197,24 @@ static int s5k4e1gx_sensor_release(void)
 
 	allow_suspend();
 
-	if (sdata->camera_clk_switch != NULL && sdata->cam_select_pin) {
+	if (machine_is_glacier()) {
 	/*0730: optical ask : CLK switch to Main Cam after 2nd Cam release*/
-	pr_info("[CAM]%s: doing clk switch to Main CAM)\n", __func__);
-	rc = gpio_request(sdata->cam_select_pin, "s5k4e1gx");
+	pr_info("%s: doing clk switch to Main CAM)\n", __func__);
+	rc = gpio_request(23, "s5k4e1gx");
 	if (rc < 0)
-		pr_err("[CAM]GPIO (%d) request fail\n", sdata->cam_select_pin);
+		pr_err("GPIO (%d) request fail\n", 23);
 	else
-		gpio_direction_output(sdata->cam_select_pin, 0);
-	gpio_free(sdata->cam_select_pin);
+		gpio_direction_output(23, 0);
+	gpio_free(23);
 
 	msleep(5);
 	/* CLK switch set 0 */
 
-	pr_info("[CAM]%s msm_camio_probe_off()\n", __func__);
+	pr_info("%s msm_camio_probe_off()\n", __func__);
 	msm_camio_probe_off(s5k4e1_pdev);
 	}
 
-	pr_info("[CAM]s5k4e1gx_release completed\n");
+	pr_info("s5k4e1gx_release completed\n");
 	mutex_unlock(&s5k4e1gx_mutex);
 	return rc;
 }
@@ -1774,7 +1334,7 @@ static int32_t s5k4e1gx_write_exp_gain(uint16_t gain, uint32_t line)
 	struct s5k4e1gx_i2c_reg_conf tbl[3];
 
 	/*
-	printk("[CAM]s5k4e1gx_write_exp_gain    gain=%d   line=%d\n", gain, line);
+	printk("s5k4e1gx_write_exp_gain    gain=%d   line=%d\n", gain, line);
 	*/
 	if ((gain == 0) || (line == 0))
 		return rc;
@@ -1881,9 +1441,6 @@ static int32_t s5k4e1gx_set_pict_exp_gain(uint16_t gain, uint32_t line)
 {
 	int32_t rc = 0;
 	CDBG("Line:%d s5k4e1gx_set_pict_exp_gain \n", __LINE__);
-	if (s5k4e1gx_ctrl->sensordata->zero_shutter_mode)
-		return rc;
-
 	rc = s5k4e1gx_write_exp_gain(gain, line);
 #ifdef CONFIG_MSM_CAMERA_7X30
 	{
@@ -1911,7 +1468,7 @@ static int32_t s5k4e1gx_video_config(int mode, int res)
 			if (rc < 0)
 				return rc;
 
-			pr_info("[CAM]s5k4e1gx sensor configuration done!\n");
+			pr_info("s5k4e1gx sensor configuration done!\n");
 		break;
 
 		case S_FULL_SIZE:
@@ -1954,7 +1511,7 @@ static int32_t s5k4e1gx_snapshot_config(int mode)
 static int32_t s5k4e1gx_raw_snapshot_config(int mode)
 {
 	int32_t rc = 0;
-       pr_info("[CAM]s5k4e1gx_raw_snapshot_config\n");
+       pr_info("s5k4e1gx_raw_snapshot_config\n");
 	rc = s5k4e1gx_setting(S_UPDATE_PERIODIC, S_RES_CAPTURE);
 	if (rc < 0)
 		return rc;
@@ -1976,14 +1533,13 @@ static int32_t s5k4e1gx_set_sensor_mode(int mode, int res)
 		break;
 
 	case SENSOR_SNAPSHOT_MODE:
-		pr_info("[CAM]KPI PA: start sensor snapshot config\n");
-		/* Check V-sync frame timer Start */
+		pr_info("KPI PA: start sensor snapshot config\n");
 		sinfo->kpi_sensor_start = ktime_to_ns(ktime_get());
 		rc = s5k4e1gx_snapshot_config(mode);
 		break;
 
 	case SENSOR_RAW_SNAPSHOT_MODE:
-		pr_info("[CAM]KPI PA: start sensor raw snapshot config\n");
+		pr_info("KPI PA: start sensor raw snapshot config\n");
 		sinfo->kpi_sensor_start = ktime_to_ns(ktime_get());
 		rc = s5k4e1gx_raw_snapshot_config(mode);
 		break;
@@ -2010,7 +1566,7 @@ static int32_t s5k4e1gx_go_to_position(uint32_t lens_pos,
 	buf[1] = code_val_lsb;
 	rc = s5k4e1gx_i2c_txdata(S5K4E1GX_AF_I2C_ADDR >> 1, buf, 2);
 	if (rc < 0)
-	pr_err("[CAM]i2c_write failed, saddr = 0x%x addr = 0x%x, val =0x%x!\n",
+	pr_err("i2c_write failed, saddr = 0x%x addr = 0x%x, val =0x%x!\n",
 		S5K4E1GX_AF_I2C_ADDR >> 1, buf[0], buf[1]);
 
 	return rc;
@@ -2134,7 +1690,7 @@ static int32_t s5k4e1gx_move_focus(int direction, int32_t num_steps)
 		if(curr_lens_pos != dest_lens_pos) {
 			rc = s5k4e1gx_go_to_position(dest_lens_pos, s5k4e1gx_mode_mask);
 			if (rc < 0) {
-				pr_err("[CAM]s5k4e1gx_go_to_position Failed in Move Focus!!!\n");
+				pr_err("s5k4e1gx_go_to_position Failed in Move Focus!!!\n");
 				return rc;
 			}
 			mdelay(s5k4e1gx_sw_damping_time_wait);
@@ -2142,7 +1698,7 @@ static int32_t s5k4e1gx_move_focus(int direction, int32_t num_steps)
 	} else {
 		rc = s5k4e1gx_go_to_position(dest_lens_pos, s5k4e1gx_mode_mask);
 		if (rc < 0) {
-			pr_err("[CAM]s5k4e1gx_go_to_position Failed in Move Focus!!!\n");
+			pr_err("s5k4e1gx_go_to_position Failed in Move Focus!!!\n");
 			return rc;
 		}
 	}
@@ -2159,13 +1715,13 @@ static int32_t s5k4e1gx_set_default_focus(void)
 	if (s5k4e1gx_ctrl->curr_step_pos != 0) {
 		rc = s5k4e1gx_move_focus(MOVE_FAR, s5k4e1gx_ctrl->curr_step_pos);
 		if (rc < 0) {
-			pr_err("[CAM]s5k4e1gx_set_default_focus Failed!!!\n");
+			pr_err("s5k4e1gx_set_default_focus Failed!!!\n");
 			return rc;
 		}
 	} else {
 		rc = s5k4e1gx_go_to_position(0, 0x02);
 		if (rc < 0) {
-			pr_err("[CAM]s5k4e1gx_go_to_position Failed!!!\n");
+			pr_err("s5k4e1gx_go_to_position Failed!!!\n");
 			return rc;
 		}
 	}
@@ -2179,9 +1735,6 @@ static int32_t s5k4e1gx_set_default_focus(void)
 
 uint8_t s5k4e1gx_preview_skip_frame(void)
 {
-	if (s5k4e1gx_ctrl->sensordata->zero_shutter_mode)
-		return 0;
-
 	if (s5k4e1gx_ctrl->sensormode == SENSOR_PREVIEW_MODE && preview_frame_count < 1) {
 		preview_frame_count++;
 		return 1;
@@ -2302,7 +1855,7 @@ static int s5k4e1gx_sensor_config(void __user *argp)
 			s5k4e1gx_set_default_focus();
 		break;
 	case CFG_I2C_IOCTL_R_OTP:{
-		pr_info("[CAM]Line:%d CFG_I2C_IOCTL_R_OTP \n", __LINE__);
+		pr_info("Line:%d CFG_I2C_IOCTL_R_OTP \n", __LINE__);
 		rc = s5k4e1gx_i2c_read_fuseid(&cdata);
 		if (copy_to_user(argp, &cdata, sizeof(struct sensor_cfg_data)))
 			rc = -EFAULT;
@@ -2337,28 +1890,6 @@ static ssize_t sensor_vendor_show(struct device *dev,
 	return ret;
 }
 
-DEFINE_MUTEX(fps_mode_lock);
-
-static ssize_t sensor_read_fps_mode(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	ssize_t length;
-	mutex_lock(&fps_mode_lock);
-	length = sprintf(buf, "%d\n", fps_mode_sel);
-	mutex_unlock(&fps_mode_lock);
-	return length;
-}
-
-static ssize_t sensor_set_fps_mode(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	uint32_t tmp = 0;
-	mutex_lock(&fps_mode_lock);
-	tmp = buf[0] - 0x30;
-	fps_mode_sel = tmp;
-	mutex_unlock(&fps_mode_lock);
-	return count;
-}
 static ssize_t sensor_read_node(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -2369,8 +1900,6 @@ static ssize_t sensor_read_node(struct device *dev,
 
 static DEVICE_ATTR(sensor, 0444, sensor_vendor_show, NULL);
 static DEVICE_ATTR(node, 0444, sensor_read_node, NULL);
-static DEVICE_ATTR(fps_mode, 0777,
-	sensor_read_fps_mode, sensor_set_fps_mode);
 
 static struct kobject *android_s5k4e1gx = NULL;
 
@@ -2392,16 +1921,9 @@ static int s5k4e1gx_sysfs_init(void)
 		"failed\n");
 		kobject_del(android_s5k4e1gx);
 	}
-	ret = sysfs_create_file(android_s5k4e1gx, &dev_attr_fps_mode.attr);
-	if (ret) {
-		printk(KERN_INFO "s5k4e1gx_sysfs_init : sysfs_create_file " \
-		"failed\n");
-		ret = -EFAULT;
-		return ret ;
-	}
         ret = sysfs_create_file(android_s5k4e1gx, &dev_attr_node.attr);
 	if (ret) {
-		pr_info("[CAM]s5k4e1gx_sysfs_init: dev_attr_node failed\n");
+		pr_info("s5k4e1gx_sysfs_init: dev_attr_node failed\n");
 		ret = -EFAULT;
 		return ret;
 	}
@@ -2414,7 +1936,7 @@ static int s5k4e1gx_sensor_probe(struct msm_camera_sensor_info *info,
 		struct msm_sensor_ctrl *s)
 {
 	int rc = 0;
-	printk("[CAM]s5k4e1gx_sensor_probe()\n");
+	printk("s5k4e1gx_sensor_probe()\n");
 
 	rc = i2c_add_driver(&s5k4e1gx_i2c_driver);
 	if (rc < 0 || s5k4e1gx_client == NULL) {
@@ -2422,12 +1944,13 @@ static int s5k4e1gx_sensor_probe(struct msm_camera_sensor_info *info,
 		goto probe_fail;
 	}
 
-	pr_info("[CAM]s5k4e1gx s->node %d\n", s->node);
+	pr_info("s5k4e1gx s->node %d\n", s->node);
 	sensor_probe_node = s->node;
 
+	if (machine_is_glacier()) {
 	/*switch PCLK and MCLK to Main cam*/
-	if (info->camera_clk_switch != NULL) {
-		pr_info("[CAM]s5k4e1gx: s5k4e1gx_sensor_probe: switch clk\n");
+	pr_info("s5k4e1gx: s5k4e1gx_sensor_probe: switch clk\n");
+	if (info->camera_clk_switch != NULL)
 		info->camera_clk_switch();
 	}
 
@@ -2448,7 +1971,7 @@ static int s5k4e1gx_sensor_probe(struct msm_camera_sensor_info *info,
 	return rc;
 
 probe_fail:
-	pr_err("[CAM]SENSOR PROBE FAILS!\n");
+	pr_err("SENSOR PROBE FAILS!\n");
 	return rc;
 }
 
@@ -2458,10 +1981,10 @@ static int s5k4e1gx_vreg_enable(struct platform_device *pdev)
 {
 	struct msm_camera_sensor_info *sdata = pdev->dev.platform_data;
 	int rc;
-	pr_info("[CAM]%s camera vreg on\n", __func__);
+	pr_info("%s camera vreg on\n", __func__);
 
 	if (sdata->camera_power_on == NULL) {
-		pr_err("[CAM]sensor platform_data didnt register\n");
+		pr_err("sensor platform_data didnt register\n");
 		return -EIO;
 	}
 	rc = sdata->camera_power_on();
@@ -2475,7 +1998,7 @@ static int s5k4e1gx_vreg_disable(struct platform_device *pdev)
 	int rc;
 	printk(KERN_INFO "%s camera vreg off\n", __func__);
 	if (sdata->camera_power_off == NULL) {
-		pr_err("[CAM]sensor platform_data didnt register\n");
+		pr_err("sensor platform_data didnt register\n");
 		return -EIO;
 	}
 	rc = sdata->camera_power_off();
@@ -2486,11 +2009,11 @@ static int s5k4e1gx_vreg_disable(struct platform_device *pdev)
 static int __s5k4e1gx_probe(struct platform_device *pdev)
 {
 	int rc;
-	printk("[CAM]__s5k4e1gx_probe\n");
+	printk("__s5k4e1gx_probe\n");
 	s5k4e1_pdev = pdev;
 	rc = s5k4e1gx_vreg_enable(pdev);
 	if (rc < 0)
-		pr_err("[CAM]__s5k4e1gx_probe fail sensor power on error\n");
+		pr_err("__s5k4e1gx_probe fail sensor power on error\n");
 
 	return msm_camera_drv_start(pdev, s5k4e1gx_sensor_probe);
 }
@@ -2504,7 +2027,7 @@ static struct platform_driver msm_camera_driver = {
 
 static int __init s5k4e1gx_init(void)
 {
-	printk("[CAM]s5k4e1gx_init\n");
+	printk("s5k4e1gx_init\n");
 	return platform_driver_register(&msm_camera_driver);
 }
 

@@ -201,21 +201,6 @@ inline int msm_gemini_q_unblock(struct msm_gemini_q *q_p)
 	return 0;
 }
 
-inline void msm_gemini_outbuf_q_cleanup(struct msm_gemini_q *q_p)
-{
-	struct msm_gemini_core_buf *buf_p;
-	GMN_DBG("%s:%d] %s\n", __func__, __LINE__, q_p->name);
-	do {
-		buf_p = msm_gemini_q_out(q_p);
-		if (buf_p) {
-			msm_gemini_platform_p2v(buf_p->file);
-			GMN_DBG("%s:%d] %s\n", __func__, __LINE__, q_p->name);
-			kfree(buf_p);
-		}
-	} while (buf_p);
-	q_p->unblck = 0;
-}
-
 inline void msm_gemini_q_cleanup(struct msm_gemini_q *q_p)
 {
 	void *data;
@@ -239,9 +224,9 @@ int msm_gemini_framedone_irq(struct msm_gemini_device *pgmn_dev,
 
 	GMN_DBG("%s:%d] Enter\n", __func__, __LINE__);
 
+	buf_in->vbuf.framedone_len = buf_in->framedone_len;
+	buf_in->vbuf.type = MSM_GEMINI_EVT_FRAMEDONE;
 	if (buf_in) {
-		buf_in->vbuf.framedone_len = buf_in->framedone_len;
-		buf_in->vbuf.type = MSM_GEMINI_EVT_FRAMEDONE;
 		GMN_DBG("%s:%d] 0x%08x %d framedone_len %d\n",
 			__func__, __LINE__,
 			(int) buf_in->y_buffer_addr, buf_in->y_len,
@@ -604,10 +589,9 @@ int __msm_gemini_open(struct msm_gemini_device *pgmn_dev)
 
 	msm_gemini_q_cleanup(&pgmn_dev->evt_q);
 	msm_gemini_q_cleanup(&pgmn_dev->output_rtn_q);
-	msm_gemini_outbuf_q_cleanup(&pgmn_dev->output_buf_q);
+	msm_gemini_q_cleanup(&pgmn_dev->output_buf_q);
 	msm_gemini_q_cleanup(&pgmn_dev->input_rtn_q);
 	msm_gemini_q_cleanup(&pgmn_dev->input_buf_q);
-	msm_gemini_core_init();
 
 	GMN_DBG("%s:%d] success\n", __func__, __LINE__);
 	return rc;
@@ -624,13 +608,6 @@ int __msm_gemini_release(struct msm_gemini_device *pgmn_dev)
 	}
 	pgmn_dev->open_count--;
 	mutex_unlock(&pgmn_dev->lock);
-
-	msm_gemini_core_release();
-	msm_gemini_q_cleanup(&pgmn_dev->evt_q);
-	msm_gemini_q_cleanup(&pgmn_dev->output_rtn_q);
-	msm_gemini_outbuf_q_cleanup(&pgmn_dev->output_buf_q);
-	msm_gemini_q_cleanup(&pgmn_dev->input_rtn_q);
-	msm_gemini_q_cleanup(&pgmn_dev->input_buf_q);
 
 	if (pgmn_dev->open_count)
 		GMN_PR_ERR(KERN_ERR "%s: multiple opens\n", __func__);
@@ -691,7 +668,6 @@ int msm_gemini_ioctl_hw_cmds(struct msm_gemini_device *pgmn_dev,
 
 	if (copy_from_user(hw_cmds_p, arg, len)) {
 		GMN_PR_ERR("%s:%d] failed\n", __func__, __LINE__);
-		kfree(hw_cmds_p);
 		return -EFAULT;
 	}
 
@@ -702,11 +678,10 @@ int msm_gemini_ioctl_hw_cmds(struct msm_gemini_device *pgmn_dev,
 	if (is_copy_to_user >= 0) {
 		if (copy_to_user(arg, hw_cmds_p, len)) {
 			GMN_PR_ERR("%s:%d] failed\n", __func__, __LINE__);
-			kfree(hw_cmds_p);
 			return -EFAULT;
 		}
 	}
-	kfree(hw_cmds_p);
+
 	return 0;
 }
 
