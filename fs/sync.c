@@ -200,12 +200,13 @@ EXPORT_SYMBOL(vfs_fsync_range);
 /**
  * vfs_fsync - perform a fsync or fdatasync on a file
  * @file:		file to sync
+ * @dentry:		dentry of @file
  * @datasync:		only perform a fdatasync operation
  *
  * Write back data and metadata for @file to disk.  If @datasync is
  * set only metadata needed to access modified file data is written.
  */
-int vfs_fsync(struct file *file, int datasync)
+int vfs_fsync(struct file *file, struct dentry *dentry, int datasync)
 {
 	return vfs_fsync_range(file, 0, LLONG_MAX, datasync);
 }
@@ -218,7 +219,7 @@ static int do_fsync(unsigned int fd, int datasync)
 
 	file = fget(fd);
 	if (file) {
-		ret = vfs_fsync(file, datasync);
+		ret = vfs_fsync(file, file->f_path.dentry, datasync);
 		fput(file);
 	}
 	return ret;

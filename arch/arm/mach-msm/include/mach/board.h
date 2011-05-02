@@ -454,7 +454,7 @@ enum usb_connect_type {
 struct t_usb_status_notifier{
 	struct list_head notifier_link;
 	const char *name;
-	void (*func)(int cable_type);
+	void (*func)(int online);
 };
 	int usb_register_notifier(struct t_usb_status_notifier *);
 	static LIST_HEAD(g_lh_usb_notifier_list);
