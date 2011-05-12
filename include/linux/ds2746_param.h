@@ -50,6 +50,7 @@ struct protect_flags_type{
 		BOOL is_battery_overtemp;
 #endif
 		BOOL is_fake_room_temp;
+		int (*func_update_charging_protect_flag)(int, int, int, BOOL*, BOOL*);
 };
 
 /* ds2746 register definition*/

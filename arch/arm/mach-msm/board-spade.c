@@ -25,12 +25,13 @@
 #include <linux/i2c.h>
 #include <linux/i2c-msm.h>
 #include <linux/spi/spi.h>
-#include <mach/qdsp5v2_1x/msm_lpa.h>
+#include <mach/qdsp5v2/msm_lpa.h>
 #include <linux/akm8975.h>
 #include <linux/bma150.h>
 #include <linux/isl29028.h>
 #include <linux/atmel_qt602240.h>
 #include <linux/synaptics_i2c_rmi.h>
+#include <linux/elan_ktf2k.h>
 #include <linux/leds-pm8058.h>
 #include <linux/proc_fs.h>
 #include <linux/ds2746_battery.h>
@@ -90,8 +91,15 @@ static int spade_get_PMIC_GPIO_INT(void)
 
 static int get_thermal_id(void)
 {
-	return (system_rev == XD? THERMAL_1000: THERMAL_300);
+	return (system_rev == XD? THERMAL_1000_100_4360: THERMAL_300_100_4360);
 }
+
+static int get_battery_id(void)
+{
+	return BATTERY_ID_SAMSUNG_1230MAH;
+}
+
+
 
 static uint opt_disable_uart2;
 
@@ -133,7 +141,7 @@ static void spade_disable_usb_charger(void)
 static int phy_init_seq[] = { 0x06, 0x36, 0x0C, 0x31, 0x31, 0x32, 0x1, 0x0D, 0x1, 0x10, -1 };
 static struct msm_hsusb_platform_data msm_hsusb_pdata = {
 	.phy_init_seq		= phy_init_seq,
-	.phy_reset		= msm_hsusb_phy_reset,
+	.phy_reset		= (void *) msm_hsusb_phy_reset,
 	.usb_id_pin_gpio  = SPADE_GPIO_USB_ID_PIN,
 	.disable_usb_charger = spade_disable_usb_charger,
 	.accessory_detect = 1, /* detect by ID pin gpio */
@@ -319,8 +327,56 @@ static struct platform_device htc_battery_pdev = {
 	},
 };
 
-static struct ds2746_platform_data ds2746_pdev_data = {
+/* battery parameters */
+UINT32 m_parameter_unknown_1280mah[] = {
+	10000, 4100, 5500, 3839, 2400, 3759,
+	400, 3667, 0, 3397,
+};
+UINT32 m_parameter_samsung_1230mah[] = {
+	/* capacity (in 0.01%) -> voltage (in mV)*/
+	10000, 4135, 7500, 3960, 4700, 3800, 1700, 3727,
+	900, 3674, 300, 3640, 0, 3420,
+};
+
+static UINT32* m_param_tbl[] = {
+	m_parameter_unknown_1280mah,
+	m_parameter_samsung_1230mah,
+};
+
+static UINT32 fl_25[] = {1280, 1230};
+static UINT32 pd_m_coef[] = {24, 30};
+static UINT32 pd_m_resl[] = {100, 100};
+static UINT32 pd_t_coef[] = {140, 250};
+static INT32 padc[] = {200, 200};
+static INT32 pw[] = {5, 5};
+
+static UINT32* pd_m_coef_tbl[] = {pd_m_coef,};
+static UINT32* pd_m_resl_tbl[] = {pd_m_resl,};
+static UINT32 capacity_deduction_tbl_01p[] = {0,};
+
+static struct battery_parameter spade_battery_parameter = {
+	.fl_25 = fl_25,
+	.pd_m_coef_tbl = pd_m_coef_tbl,
+	.pd_m_coef_tbl_boot = pd_m_coef_tbl,
+	.pd_m_resl_tbl = pd_m_resl_tbl,
+	.pd_m_resl_tbl_boot = pd_m_resl_tbl,
+	.pd_t_coef = pd_t_coef,
+	.padc = padc,
+	.pw = pw,
+	.capacity_deduction_tbl_01p = capacity_deduction_tbl_01p,
+	.id_tbl = NULL,
+	.temp_index_tbl = NULL,
+	.m_param_tbl = m_param_tbl,
+	.m_param_tbl_size = sizeof(m_param_tbl)/sizeof(UINT32*),
+};
+
+static ds2746_platform_data ds2746_pdev_data = {
 	.func_get_thermal_id = get_thermal_id,
+	.func_get_battery_id = get_battery_id,
+	.func_poweralg_config_init = NULL,	/* by default */
+	.func_update_charging_protect_flag = NULL,	/* by default */
+	.r2_kohm = 0,	/* use get_battery_id, doesn't need this */
+	.batt_param = &spade_battery_parameter,
 };
 
 static struct platform_device ds2746_battery_pdev = {
@@ -460,6 +516,7 @@ static struct isl29028_platform_data isl29028_pdata = {
 	.debounce = 1,
 	.mapping_table = isl29028_mapping_table,
 	.mapping_size = ARRAY_SIZE(isl29028_mapping_table),
+	.enable_polling_ignore = 1,
 };
 
 static int spade_ts_atmel_power(int on)
@@ -496,13 +553,13 @@ struct atmel_i2c_platform_data spade_ts_atmel_data[] = {
 		.config_T8 = {8, 0, 10, 10, 0, 0, 10, 32, 4, 170},
 		.config_T9 = {139, 0, 0, 19, 11, 0, 16, 35, 3, 7, 10, 10, 5, 15, 4, 10, 20, 0, 0, 0, 0, 0, 0, 2, 6, 6, 162, 40, 168, 70, 20, 4},
 		.config_T15 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-		.config_T19 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+		.config_T18 = {0, 0},
+		.config_T19 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 		.config_T20 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 		.config_T22 = {15, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 7, 18, 255, 255, 0},
-		.config_T23 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+		.config_T23 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 		.config_T24 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 		.config_T25 = {3, 0, 200, 50, 64, 31, 0, 0, 0, 0, 0, 0, 0, 0},
-		.config_T27 = {0, 0, 0, 0, 0, 0, 0},
 		.config_T28 = {0, 0, 3, 4, 8, 60},
 		.object_crc = {0xCD, 0xD7, 0xF6 },
 		.cable_config = {35, 20, 8, 16},
@@ -526,9 +583,10 @@ struct atmel_i2c_platform_data spade_ts_atmel_data[] = {
 		.config_T8 = {9, 0, 10, 10, 0, 0, 10, 15},
 		.config_T9 = {139, 0, 0, 19, 11, 0, 16, 30, 3, 7, 10, 10, 5, 15, 4, 10, 20, 0, 0, 0, 0, 0, 8, 2, 6, 6, 162, 40, 168, 70, 20},
 		.config_T15 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-		.config_T19 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+		.config_T18 = {0, 0},
+		.config_T19 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 		.config_T22 = {15, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 7, 18, 255, 255, 0},
-		.config_T23 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+		.config_T23 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 		.config_T24 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 		.config_T25 = {3, 0, 200, 50, 64, 31, 0, 0, 0, 0, 0, 0, 0, 0},
 		.config_T27 = {0, 0, 0, 0, 0, 0, 0},
@@ -563,6 +621,7 @@ static struct synaptics_i2c_rmi_platform_data spade_ts_3k_data[] = {
 		.sensitivity_adjust = 0,
 		.finger_support = 4,
 		.display_height = 800,
+		.filter_level = {20, 60, 1112, 1152},
 	},
 	{
 		.version = 0x0100,
@@ -578,6 +637,47 @@ static struct synaptics_i2c_rmi_platform_data spade_ts_3k_data[] = {
 	}
 };
 
+static int spade_elan_ktf2k_ts_power(int on)
+{
+	pr_info("%s: power %d\n", __func__, on);
+
+	if (on) {
+		gpio_set_value(SPADE_GPIO_TP_3V3_ENABLE, 1);
+		udelay(300);
+		gpio_set_value(PM8058_GPIO_PM_TO_SYS(SPADE_TP_RSTz), 1);
+		msleep(300);
+	} else {
+		gpio_set_value(SPADE_GPIO_TP_3V3_ENABLE, 0);
+		udelay(11);
+	}
+
+	return 0;
+}
+
+static int spade_elan_ktf2k_ts_reset(void)
+{
+	pr_info("%s: gpio reset\n", __func__);
+	gpio_set_value(PM8058_GPIO_PM_TO_SYS(SPADE_TP_RSTz), 0);
+	udelay(100);
+	gpio_set_value(PM8058_GPIO_PM_TO_SYS(SPADE_TP_RSTz), 1);
+	msleep(300);
+
+	return 0;
+}
+
+struct elan_ktf2k_i2c_platform_data spade_ts_elan_ktf2k_data[] = {
+	{
+		.version = 0x0021,
+		.abs_x_min = 0,
+		.abs_x_max = 640,
+		.abs_y_min = 0,
+		.abs_y_max = 1088,
+		.intr_gpio = SPADE_GPIO_TP_ATT_N,
+		.power = spade_elan_ktf2k_ts_power,
+		.reset = spade_elan_ktf2k_ts_reset,
+	},
+};
+
 static struct i2c_board_info i2c_devices[] = {
 	{
 		I2C_BOARD_INFO(ATMEL_QT602240_NAME, 0x94 >> 1),
@@ -588,6 +688,11 @@ static struct i2c_board_info i2c_devices[] = {
 		I2C_BOARD_INFO(SYNAPTICS_3K_NAME, 0x20),
 		.platform_data = &spade_ts_3k_data,
 		.irq = MSM_GPIO_TO_INT(SPADE_GPIO_TP_ATT_N)
+	},
+	{
+		I2C_BOARD_INFO(ELAN_KTF2K_NAME, 0x15),
+		.platform_data = &spade_ts_elan_ktf2k_data,
+		.irq = MSM_GPIO_TO_INT(SPADE_GPIO_TP_ATT_N),
 	},
 	{
 		I2C_BOARD_INFO(MICROP_I2C_NAME, 0xCC >> 1),
@@ -1295,6 +1400,8 @@ static void msm_qsd_spi_gpio_release(void)
 
 static struct msm_spi_platform_data qsd_spi_pdata = {
 	.max_clock_speed = 26000000,
+	.clk_name = "spi_clk",
+	.pclk_name = "spi_pclk",
 	.gpio_config  = msm_qsd_spi_gpio_config,
 	.gpio_release = msm_qsd_spi_gpio_release,
 //	.dma_config = msm_qsd_spi_dma_config,
@@ -1374,7 +1481,7 @@ static uint32_t camera_off_gpio_table[] = {
 	PCOM_GPIO_CFG(12, 0, GPIO_INPUT, GPIO_PULL_DOWN, GPIO_4MA), /* PCLK */
 	PCOM_GPIO_CFG(13, 0, GPIO_INPUT, GPIO_PULL_DOWN, GPIO_4MA), /* HSYNC_IN */
 	PCOM_GPIO_CFG(14, 0, GPIO_INPUT, GPIO_PULL_DOWN, GPIO_4MA), /* VSYNC_IN */
-	PCOM_GPIO_CFG(15, 1, GPIO_OUTPUT, GPIO_NO_PULL, GPIO_2MA), /* MCLK */
+	PCOM_GPIO_CFG(15, 0, GPIO_OUTPUT, GPIO_NO_PULL, GPIO_2MA), /* MCLK */
 
 };
 
@@ -2024,6 +2131,14 @@ static ssize_t spade_virtual_keys_show(struct kobject *kobj,
 		"\n");
 }
 
+static struct kobj_attribute spade_elan_virtual_keys_attr = {
+	.attr = {
+		.name = "virtualkeys.elan-touchscreen",
+		.mode = S_IRUGO,
+	},
+	.show = &spade_virtual_keys_show,
+};
+
 static struct kobj_attribute spade_synaptics_virtual_keys_attr = {
 	.attr = {
 		.name = "virtualkeys.synaptics-rmi-touchscreen",
@@ -2041,6 +2156,7 @@ static struct kobj_attribute spade_virtual_keys_attr = {
 };
 
 static struct attribute *spade_properties_attrs[] = {
+	&spade_elan_virtual_keys_attr.attr,
 	&spade_synaptics_virtual_keys_attr.attr,
 	&spade_virtual_keys_attr.attr,
 	NULL
@@ -2062,6 +2178,9 @@ static void __init spade_init(void)
 	printk(KERN_INFO "%s: revision = %d\n", __func__, system_rev);
 	printk(KERN_INFO "%s: microp version = %s\n", __func__, microp_ver);
 
+	/* Must set msm_hw_reset_hook before first proc comm */
+	msm_hw_reset_hook = spade_reset;
+
 	if (socinfo_init() < 0)
 		printk(KERN_ERR "%s: socinfo_init() failed!\n", __func__);
 
@@ -2077,8 +2196,6 @@ static void __init spade_init(void)
 		msm_serial_debug_init(MSM_UART2_PHYS, INT_UART2,
 		&msm_device_uart2.dev, 23, MSM_GPIO_TO_INT(SPADE_GPIO_UART2_RX));
 #endif
-
-	msm_hw_reset_hook = spade_reset;
 
 #ifdef CONFIG_SERIAL_MSM_HS
 	msm_device_uart_dm1.dev.platform_data = &msm_uart_dm1_pdata;

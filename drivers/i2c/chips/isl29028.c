@@ -14,7 +14,6 @@
  */
 
 #include <linux/delay.h>
-#include <linux/earlysuspend.h>
 #include <linux/i2c.h>
 #include <linux/input.h>
 #include <linux/interrupt.h>
@@ -23,7 +22,6 @@
 #include <linux/workqueue.h>
 #include <linux/irq.h>
 #include <linux/errno.h>
-#include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/gpio.h>
 #include <linux/miscdevice.h>
@@ -31,13 +29,20 @@
 #include <asm/uaccess.h>
 #include <asm/mach-types.h>
 #include <linux/isl29028.h>
+#include <linux/pl_sensor.h>
 #include <linux/capella_cm3602.h>
 #include <asm/setup.h>
 #include <linux/wakelock.h>
 #include <linux/rtc.h>
+#include <linux/slab.h>
 #include <mach/board.h>
 
-#define D(x...) pr_info(x)
+#define DPS(x...) printk(KERN_DEBUG "[PS][ISL29028] " x)
+#define DLS(x...) printk(KERN_DEBUG "[LS][ISL29028] " x)
+#define IPS(x...) printk(KERN_INFO "[PS][ISL29028] " x)
+#define ILS(x...) printk(KERN_INFO "[LS][ISL29028] " x)
+#define EPS(x...) printk(KERN_ERR "[PS][ISL29028 ERROR] " x)
+#define ELS(x...) printk(KERN_ERR "[LS][ISL29028 ERROR] " x)
 
 #define I2C_RETRY_COUNT 10
 
@@ -90,7 +95,6 @@ struct isl29028_info {
 	struct input_dev *ls_input_dev;
 	struct input_dev *ps_input_dev;
 
-	struct early_suspend early_suspend;
 	struct i2c_client *i2c_client;
 	struct workqueue_struct *lp_wq;
 
@@ -119,7 +123,6 @@ struct isl29028_info {
 	uint16_t cali_table[10];
 	int irq;
 
-	int is_suspend;
 	int ls_calibrate;
 
 	int (*power)(int, uint8_t); /* power to the chip */
@@ -138,9 +141,11 @@ struct isl29028_info {
 	uint8_t *mapping_table;
 	uint8_t mapping_size;
 	uint8_t ps_base_index;
+
+	uint8_t enable_polling_ignore;
 };
 
-struct isl29028_info *lp_info;
+static struct isl29028_info *lp_info;
 
 /*static uint32_t als_kadc;*/
 static uint32_t ps_threshold;
@@ -171,7 +176,7 @@ static int I2C_RxData(char *rxData, int length)
 	}
 
 	if (loop_i >= I2C_RETRY_COUNT) {
-		printk(KERN_ERR "%s retry over %d\n",
+		EPS("%s retry over %d\n",
 			__func__, I2C_RETRY_COUNT);
 		return -EIO;
 	}
@@ -199,7 +204,7 @@ static int I2C_TxData(char *txData, int length)
 	}
 
 	if (loop_i >= I2C_RETRY_COUNT) {
-		printk(KERN_ERR "%s retry over %d\n",
+		EPS("%s retry over %d\n",
 			__func__, I2C_RETRY_COUNT);
 		return -EIO;
 	}
@@ -209,20 +214,21 @@ static int I2C_TxData(char *txData, int length)
 
 static uint16_t get_ls_adc_value(uint16_t *raw_adc_value)
 {
-	uint16_t value, tmp_value, ret;
+	uint16_t value, tmp_value;
 	struct isl29028_info *lpi = lp_info;
 	char buffer[3];
+	int ret = 0;
 
 	buffer[0] = ISL29028_LS_DATA1;
 	ret = I2C_RxData(buffer, 2);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail\n", __func__);
+		ELS("%s: I2C_RxData fail\n", __func__);
 		return ret;
 	}
 	value = buffer[0];
 	tmp_value = buffer[1];
 
-	/*D("%s: value = 0x%03X, tmp_value = 0x%03X\n",
+	/*DLS("%s: value = 0x%03X, tmp_value = 0x%03X\n",
 		__func__, value, tmp_value);*/
 
 	value = value | tmp_value << 8;
@@ -252,7 +258,7 @@ static uint16_t get_ps_adc_value(void)
 	buffer[0] = ISL29028_PROX_DATA;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail\n", __func__);
+		EPS("%s: I2C_RxData fail\n", __func__);
 		return 0;
 	}
 	value = buffer[0];
@@ -270,11 +276,11 @@ static int _isl29028_set_reg_bit(struct i2c_client *client, u8 set,
 	buffer[0] = cmd;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail\n", __func__);
+		EPS("%s: I2C_RxData fail\n", __func__);
 		return ret;
 	}
 	value = buffer[0];
-	/*printk(KERN_DEBUG "Andy, %s: I2C_RxData[0x%x] = 0x%x\n",
+	/*DPS("Andy, %s: I2C_RxData[0x%x] = 0x%x\n",
 		__func__, cmd, value);*/
 
 	if (set)
@@ -286,13 +292,13 @@ static int _isl29028_set_reg_bit(struct i2c_client *client, u8 set,
 	buffer[1] = value;
 	ret = I2C_TxData(buffer, 2);
 	if (ret < 0) {
-		pr_err("%s: I2C_TxData fail\n", __func__);
+		EPS("%s: I2C_TxData fail\n", __func__);
 		return -EIO;
 	}
 
 	/* Debug use */
 	/*value = i2c_smbus_read_byte_data(client, cmd);
-	printk(KERN_DEBUG "Andy, %s: After set reg bit[0x%x] = 0x%x\n",
+	DPS("Andy, %s: After set reg bit[0x%x] = 0x%x\n",
 		__func__, cmd, value);*/
 
 	return ret;
@@ -314,17 +320,17 @@ static int set_lsensor_range(uint16_t lt, uint16_t ht)
 	buffer[3] = (ht >> 4) & 0xFF;
 	ret = I2C_TxData(buffer, 4);
 	if (ret < 0) {
-		printk(KERN_ERR "%s : I2C_TxData fail\n", __func__);
+		ELS("%s : I2C_TxData fail\n", __func__);
 		return ret;
 	}
 
 /*
 	value = i2c_smbus_read_byte_data(lpi->i2c_client, ISL29028_LS_TH1);
-	D("TH1--------->0x%03X\n", value);
+	DLS("TH1--------->0x%03X\n", value);
 	value = i2c_smbus_read_byte_data(lpi->i2c_client, ISL29028_LS_TH2);
-	D("TH2--------->0x%03X\n", value);
+	DLS("TH2--------->0x%03X\n", value);
 	value = i2c_smbus_read_byte_data(lpi->i2c_client, ISL29028_LS_TH3);
-	D("TH3--------->0x%03X\n", value);
+	DLS("TH3--------->0x%03X\n", value);
 */
 	return ret;
 }
@@ -336,11 +342,11 @@ static int set_psensor_range(u8 lt, u8 ht)
 	struct isl29028_info *lpi = lp_info;
 
 	if (!lpi) {
-		pr_err("%s: ls_info is empty\n", __func__);
+		EPS("%s: lpi_info is empty\n", __func__);
 		return -EINVAL;
 	}
 
-	/*D("%s: PS ps_threshold = 0x%x\n",
+	/*DPS("%s: PS ps_threshold = 0x%x\n",
 			__func__, ps_threshold);*/
 
 	if (ps_threshold >> 16 == PS_CALIBRATED) {
@@ -348,7 +354,7 @@ static int set_psensor_range(u8 lt, u8 ht)
 		ht = ps_threshold & 0xFF;
 	}
 
-	D("%s: Setting psensor range (0x%X, 0x%X)\n",
+	IPS("%s: Setting psensor range (0x%X, 0x%X)\n",
 			__func__, lt, ht);
 
 	buffer[0] = ISL29028_PROX_LT;
@@ -356,7 +362,7 @@ static int set_psensor_range(u8 lt, u8 ht)
 	buffer[2] = ht;
 	ret = I2C_TxData(buffer, 3);
 	if (ret < 0) {
-		printk(KERN_ERR "%s : I2C_TxData fail\n", __func__);
+		EPS("%s : I2C_TxData fail\n", __func__);
 		return ret;
 	}
 
@@ -368,7 +374,7 @@ static void set_psensor_th(u8 lt, u8 ht)
 	struct isl29028_info *lpi = lp_info;
 
 	ps_threshold =  (PS_CALIBRATED << 16) |	(lt << 8) | ht;
-	/*D("set_ps_th: ps_threshold = 0x%08X\n",
+	/*DPS("set_ps_th: ps_threshold = 0x%08X\n",
 		ps_threshold);*/
 
 	lpi->ps_lt = lt;
@@ -385,7 +391,7 @@ static void lightsensor_real_disable(struct isl29028_info *lpi)
 		ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
 			ISL29028_CONFIGURE, ISL29028_ALS_EN);
 		if (ret < 0)
-			pr_err("%s: disable auto light sensor fail\n",
+			ELS("%s: disable auto light sensor fail\n",
 				__func__);
 		else
 			lpi->als_enable = 0;
@@ -393,7 +399,7 @@ static void lightsensor_real_disable(struct isl29028_info *lpi)
 		ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
 			ISL29028_INTERRUPT, ISL29028_INT_ALS_FLAG);
 		if (ret < 0)
-			pr_err("%s: clear lsensor intr flag fail\n", __func__);
+			ELS("%s: clear lsensor intr flag fail\n", __func__);
 	}
 }
 
@@ -413,27 +419,28 @@ static void report_psensor_input_event(struct isl29028_info *lpi,
 	else if (ps_adc <= lpi->ps_ht)
 		val = 1;
 	else
-		D("%s: Proximity adc value not as expected!\n", __func__);
+		IPS("%s: Proximity adc value not as expected!\n", __func__);
 
-	if ((lpi->mfg_mode != NO_IGNORE_BOOT_MODE) && (val == 0)) {
+	if ((lpi->enable_polling_ignore == 1) &&
+	    (lpi->mfg_mode != NO_IGNORE_BOOT_MODE) && (val == 0)) {
 		if (((int)ts_start.tv_sec == (int)ts_end.tv_sec) &&
 				(!((ts_end.tv_nsec - ts_start.tv_nsec) >
 				NEAR_DELAY_TIME))) {
 			lpi->ps_pocket_mode = 1;
-			D("Ignore NEAR event");
+			IPS("Ignore NEAR event");
 			lightsensor_real_disable(lpi);
 			return;
 		} else if ((((int)ts_end.tv_sec - (int)ts_start.tv_sec) == 1)
 				&& (!(((1000000000 - ts_start.tv_nsec) +
 				ts_end.tv_nsec) > NEAR_DELAY_TIME))) {
 			lpi->ps_pocket_mode = 1;
-			D("Ignore NEAR event2");
+			IPS("Ignore NEAR event2");
 			lightsensor_real_disable(lpi);
 			return;
 		}
 	}
 
-	D("proximity %s\n", val ? "FAR" : "NEAR");
+	IPS("proximity %s\n", val ? "FAR" : "NEAR");
 
 	if (lpi->debounce == 1) {
 		if (val == 0) {
@@ -450,11 +457,12 @@ static void report_psensor_input_event(struct isl29028_info *lpi,
 	/* 0 is close, 1 is far */
 	input_report_abs(lpi->ps_input_dev, ABS_DISTANCE, val);
 	input_sync(lpi->ps_input_dev);
+	blocking_notifier_call_chain(&psensor_notifier_list, val+2, NULL);
 
 	ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
 		ISL29028_INTERRUPT, ISL29028_INT_ALS_FLAG);
 	if (ret < 0)
-		pr_err("%s: clear lsensor intr flag fail\n", __func__);
+		EPS("%s: clear lsensor intr flag fail\n", __func__);
 
 	wake_lock_timeout(&(lpi->ps_wake_lock), 2*HZ);
 }
@@ -478,17 +486,17 @@ static void report_lsensor_input_event(struct isl29028_info *lpi)
 			*(lpi->cali_table + (i - 1)) + 1,
 		*(lpi->cali_table + i));
 	if (ret < 0)
-		printk(KERN_ERR "%s fail\n", __func__);
+		ELS("%s: set_lsensor_range fail\n", __func__);
 
-	D("ALS_ADC = 0x%03X, Level = %d \n", adc_value, level);
-	/*D("%s: RAW ADC = 0x%03X\n", __func__, raw_adc_value);*/
+	ILS("ALS_ADC = 0x%03X, Level = %d \n", adc_value, level);
+	/*DLS("%s: RAW ADC = 0x%03X\n", __func__, raw_adc_value);*/
 	input_report_abs(lpi->ls_input_dev, ABS_MISC, level);
 	input_sync(lpi->ls_input_dev);
 
 	ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
 		ISL29028_INTERRUPT, ISL29028_INT_ALS_FLAG);
 	if (ret < 0)
-		pr_err("%s: clear lsensor intr flag fail\n", __func__);
+		ELS("%s: clear lsensor intr flag fail\n", __func__);
 
 }
 
@@ -496,12 +504,12 @@ static int lightsensor_real_enable(struct isl29028_info *lpi)
 {
 	int ret = -1;
 
-	/*D("%s\n", __func__);*/
+	/*DLS("%s\n", __func__);*/
 
 	ret = _isl29028_set_reg_bit(lpi->i2c_client, 1,
 		ISL29028_CONFIGURE, ISL29028_ALS_EN);
 	if (ret < 0)
-		pr_err("%s: error\n", __func__);
+		ELS("%s: _isl29028_set_reg_bit error\n", __func__);
 	else {
 		lpi->als_enable = 1;
 		input_report_abs(lpi->ls_input_dev, ABS_MISC, -1);
@@ -531,7 +539,7 @@ static void __report_psensor_near(struct isl29028_info *lpi, uint16_t ps_adc)
 		ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
 			ISL29028_CONFIGURE, ISL29028_ALS_EN);
 		if (ret < 0)
-			pr_err("%s: disable auto light sensor"
+			EPS("%s: disable auto light sensor"
 			" fail\n", __func__);
 		else
 			lpi->als_enable = 0;
@@ -548,7 +556,7 @@ static void judge_and_enable_lightsensor(struct isl29028_info *lpi)
 	if (lpi->ls_enable_flag && (lpi->ps_irq_flag == 0)) {
 		ret = lightsensor_real_enable(lpi);
 		if (ret < 0)
-			pr_err("%s: lightsensor_real_enable: not enabled!\n",
+			ELS("%s: lightsensor_real_enable: not enabled!\n",
 				__func__);
 	}
 }
@@ -572,14 +580,14 @@ static void clear_intr_flags(uint8_t intrrupt, struct isl29028_info *lpi)
 		ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
 			ISL29028_INTERRUPT, ISL29028_INT_ALS_FLAG);
 		if (ret < 0)
-			pr_err("%s: clear lsensor intr flag fail\n",
+			ELS("%s: clear lsensor intr flag fail\n",
 				__func__);
 	}
 	if (intrrupt & ISL29028_INT_PROX_FLAG) {
 		ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
 			ISL29028_INTERRUPT, ISL29028_INT_PROX_FLAG);
 		if (ret < 0)
-			pr_err("%s: clear psensor intr flag fail\n",
+			EPS("%s: clear psensor intr flag fail\n",
 				__func__);
 	}
 }
@@ -595,7 +603,7 @@ static void check_and_recover(struct isl29028_info *lpi)
 	buffer[0] = ISL29028_INTERRUPT;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail (ISL29028_INTERRUPT)\n",
+		EPS("%s: I2C_RxData fail (ISL29028_INTERRUPT)\n",
 			__func__);
 		return;
 	}
@@ -604,7 +612,7 @@ static void check_and_recover(struct isl29028_info *lpi)
 	buffer[0] = ISL29028_CONFIGURE;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail (ISL29028_CONFIGURE)\n",
+		EPS("%s: I2C_RxData fail (ISL29028_CONFIGURE)\n",
 			__func__);
 		return;
 	}
@@ -620,7 +628,7 @@ static void check_and_recover(struct isl29028_info *lpi)
 		buffer[1] = INTR_DEFAULT;
 		ret = I2C_TxData(buffer, 2);
 		if (ret < 0)
-			printk(KERN_ERR "%s : Set LPS INTR fail\n", __func__);
+			EPS("%s : Set LPS INTR fail\n", __func__);
 	}
 
 	if (def_reg_config != CONFIG_DEFAULT) {
@@ -628,49 +636,51 @@ static void check_and_recover(struct isl29028_info *lpi)
 		buffer[1] = (CONFIG_DEFAULT | orig_enabled);
 		ret = I2C_TxData(buffer, 2);
 		if (ret < 0)
-			printk(KERN_ERR "%s : Set LPS Configuration fail\n",
+			EPS("%s : Set LPS Configuration fail\n",
 				__func__);
 	}
 }
 
 static void sensor_irq_do_work(struct work_struct *work)
 {
-	uint8_t intrrupt, ret, reg_config;
+	uint8_t intrrupt, reg_config;
 	struct isl29028_info *lpi = lp_info;
 	char buffer[2];
-
+	int ret = 0;
 	int value1 = -1;
 
 	uint16_t ps_adc = 0;
 
 	value1 = gpio_get_value(lpi->intr_pin);
-	/*D("%s: lpi->intr_pin = %d\n", __func__, value1);*/
+	/*DPS("%s: lpi->intr_pin = %d\n", __func__, value1);*/
 
 	buffer[0] = ISL29028_INTERRUPT;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail (ISL29028_INTERRUPT)\n",
+		EPS("%s: I2C_RxData fail (ISL29028_INTERRUPT)\n",
 			__func__);
+		enable_irq(lpi->irq);
 		return;
 	}
 	intrrupt = buffer[0];
-	D("isl_irq: INT = 0x%x\n", intrrupt);
 
 	buffer[0] = ISL29028_CONFIGURE;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail (ISL29028_CONFIGURE)\n",
+		EPS("%s: I2C_RxData fail (ISL29028_CONFIGURE)\n",
 			__func__);
+		enable_irq(lpi->irq);
 		return;
 	}
 	reg_config = buffer[0];
-	D("isl_irq: CONFIG = 0x%x, INT_PIN = %d\n", reg_config, value1);
+	IPS("isl_irq: CONFIG = 0x%x, INT_PIN = %d, INT = 0x%x\n",
+		reg_config, value1, intrrupt);
 
 	if (reg_config & ISL29028_PROX_EN) {
 
 		ps_adc = get_ps_adc_value();
-		D("isl_irq: ps_adc = 0x%02X, ps_lt = 0x%02X, ps_ht = 0x%02X\n",
-			ps_adc, lpi->ps_lt, lpi->ps_ht);
+		DPS("isl_irq: ps_adc = 0x%02X, ps_lt = 0x%02X, ps_ht ="
+		    " 0x%02X\n", ps_adc, lpi->ps_lt, lpi->ps_ht);
 
 		if (reg_config & ISL29028_ALS_EN) {
 			if (ps_adc > lpi->ps_ht)
@@ -680,7 +690,7 @@ static void sensor_irq_do_work(struct work_struct *work)
 			else if (ps_adc <= lpi->ps_ht)
 				__report_psensor_far(lpi, ps_adc);
 			else {
-				D("%s: Suppose ps and ls enabled or "
+				DPS("%s: Suppose ps and ls enabled or "
 					"LS interrupt, but NO!\n", __func__);
 				clear_intr_flags(intrrupt, lpi);
 			}
@@ -701,7 +711,7 @@ static void sensor_irq_do_work(struct work_struct *work)
 	} else if (is_only_ls_enabled(reg_config))
 		report_lsensor_input_event(lpi);
 	else {
-		D("%s: ps and ls both disabled!\n", __func__);
+		DPS("%s: ps and ls both disabled!\n", __func__);
 		clear_intr_flags(intrrupt, lpi);
 	}
 
@@ -715,7 +725,7 @@ static void report_near_do_work(struct work_struct *w)
 	struct isl29028_info *lpi = lp_info;
 	int ret;
 
-	D("%s\n", __func__);
+	DPS("%s\n", __func__);
 
 	input_report_abs(lpi->ps_input_dev, ABS_DISTANCE, 0);
 	input_sync(lpi->ps_input_dev);
@@ -723,8 +733,9 @@ static void report_near_do_work(struct work_struct *w)
 	ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
 		ISL29028_INTERRUPT, ISL29028_INT_ALS_FLAG);
 	if (ret < 0)
-		pr_err("%s: clear lsensor intr flag fail\n", __func__);
+		EPS("%s: clear lsensor intr flag fail\n", __func__);
 
+	blocking_notifier_call_chain(&psensor_notifier_list, 2, NULL);
 	wake_lock_timeout(&(lpi->ps_wake_lock), 2*HZ);
 }
 
@@ -744,21 +755,22 @@ static void info_do_work(struct work_struct *w)
 	buffer[0] = ISL29028_TEST1;
 	ret = I2C_RxData(buffer, 2);
 	if (ret < 0)
-		pr_err("%s: I2C_RxData fail (ISL29028_TEST1)\n",
+		EPS("%s: I2C_RxData fail (ISL29028_TEST1)\n",
 			__func__);
 	value_of_test1 = buffer[0];
 	value_of_test2 = buffer[1];
 
-	D("\n%s: TEST1 = 0x%02x, TEST2 = 0x%02x\n",
+	DPS("\n");
+	DPS("%s: TEST1 = 0x%02x, TEST2 = 0x%02x\n",
 		__func__, value_of_test1, value_of_test2);
 
 	value1 = gpio_get_value(lpi->intr_pin);
-	D("%s: intr_pin = %d, value of intr_pin = %d\n",
+	DPS("%s: intr_pin = %d, value of intr_pin = %d\n",
 		__func__, lpi->intr_pin, value1);
 
 	value = get_ps_adc_value();
 
-	D("%s: PS_ADC[0x%03X], ENABLE = %d\n",
+	DPS("%s: PS_ADC[0x%03X], ENABLE = %d\n",
 		__func__, value, lpi->ps_enable);
 
 	adc_value = get_ls_adc_value(&raw_adc_value);
@@ -771,13 +783,13 @@ static void info_do_work(struct work_struct *w)
 		}
 	}
 
-	D("%s: LS_ADC = 0x%03X, Level = %d \n", __func__, adc_value, level);
-	D("%s: LS_RAW ADC = 0x%03X\n", __func__, raw_adc_value);
+	DLS("%s: LS_ADC = 0x%03X, Level = %d \n", __func__, adc_value, level);
+	DLS("%s: LS_RAW ADC = 0x%03X\n", __func__, raw_adc_value);
 
 	buffer[0] = ISL29028_LS_TH1;
 	ret = I2C_RxData(buffer, 3);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail (ISL29028_LS_TH1)\n",
+		ELS("%s: I2C_RxData fail (ISL29028_LS_TH1)\n",
 			__func__);
 		return;
 	}
@@ -785,28 +797,28 @@ static void info_do_work(struct work_struct *w)
 	TH2_value = buffer[1];
 	TH3_value = buffer[2];
 
-	D("%s: LS_LOW_TH--------->0x%01X%02X\n", __func__,
+	DLS("%s: LS_LOW_TH--------->0x%01X%02X\n", __func__,
 		(TH2_value & 0xF), TH1_value);
-	D("%s: LS_HIGH_TH--------->0x%02X%01X\n", __func__,
+	DLS("%s: LS_HIGH_TH--------->0x%02X%01X\n", __func__,
 		TH3_value, ((TH2_value >> 4) & 0xF));
 
 	buffer[0] = ISL29028_PROX_LT;
 	ret = I2C_RxData(buffer, 2);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail (ISL29028_PROX_LT)\n",
+		EPS("%s: I2C_RxData fail (ISL29028_PROX_LT)\n",
 			__func__);
 		return;
 	}
 	PROX_LT = buffer[0];
 	PROX_HT = buffer[1];
 
-	D("%s: PROX_LT--------->0x%02X\n", __func__, PROX_LT);
-	D("%s: PROX_HT--------->0x%02X\n", __func__, PROX_HT);
+	DPS("%s: PROX_LT--------->0x%02X\n", __func__, PROX_LT);
+	DPS("%s: PROX_HT--------->0x%02X\n", __func__, PROX_HT);
 
 	buffer[0] = ISL29028_INTERRUPT;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail (ISL29028_INTERRUPT)\n",
+		EPS("%s: I2C_RxData fail (ISL29028_INTERRUPT)\n",
 			__func__);
 		return;
 	}
@@ -815,14 +827,14 @@ static void info_do_work(struct work_struct *w)
 	buffer[0] = ISL29028_CONFIGURE;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail (ISL29028_CONFIGURE)\n",
+		EPS("%s: I2C_RxData fail (ISL29028_CONFIGURE)\n",
 			__func__);
 		return;
 	}
 	reg_config = buffer[0];
 
-	D("%s: reg_config = 0x%x\n", __func__, reg_config);
-	D("%s: intrrupt = 0x%x\n", __func__, intrrupt);
+	DPS("%s: reg_config = 0x%x\n", __func__, reg_config);
+	DPS("%s: intrrupt = 0x%x\n", __func__, intrrupt);
 
 	/*queue_delayed_work(lpi->lp_wq, &info_work,
 		msecs_to_jiffies(3000));*/
@@ -856,7 +868,7 @@ static uint16_t get_stable_ps_adc_value(void)
 	buffer[0] = ISL29028_PROX_DATA;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail\n", __func__);
+		EPS("%s: I2C_RxData fail\n", __func__);
 		return 0;
 	}
 	value[0] = buffer[0];
@@ -864,7 +876,7 @@ static uint16_t get_stable_ps_adc_value(void)
 	buffer[0] = ISL29028_PROX_DATA;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail\n", __func__);
+		EPS("%s: I2C_RxData fail\n", __func__);
 		return 0;
 	}
 	value[1] = buffer[0];
@@ -872,15 +884,15 @@ static uint16_t get_stable_ps_adc_value(void)
 	buffer[0] = ISL29028_PROX_DATA;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail\n", __func__);
+		EPS("%s: I2C_RxData fail\n", __func__);
 		return 0;
 	}
 	value[2] = buffer[0];
 
-	/*D("Sta_ps: Before sort, value[0, 1, 2] = [0x%x, 0x%x, 0x%x]",
+	/*DPS("Sta_ps: Before sort, value[0, 1, 2] = [0x%x, 0x%x, 0x%x]",
 		value[0], value[1], value[2]);*/
 	mid_val = mid_value(value, 3);
-	/*D("Sta_ps: After sort, value[0, 1, 2] = [0x%x, 0x%x, 0x%x]",
+	/*DPS("Sta_ps: After sort, value[0, 1, 2] = [0x%x, 0x%x, 0x%x]",
 		value[0], value[1], value[2]);*/
 
 	return mid_val & 0xFF;
@@ -893,12 +905,12 @@ static void polling_do_work(struct work_struct *w)
 	uint16_t ps_adc = 0;
 	int i = 0;
 
-	/*D("lpi->ps_enable = %d\n", lpi->ps_enable);*/
+	/*DPS("lpi->ps_enable = %d\n", lpi->ps_enable);*/
 	if (lpi->ps_enable == 0)
 		return;
 
 	ps_adc = get_stable_ps_adc_value();
-	/*D("polling: ps_adc = 0x%02X, ps_next_base_value = 0x%02X,"
+	/*DPS("polling: ps_adc = 0x%02X, ps_next_base_value = 0x%02X,"
 		" ps_lt = 0x%02X, ps_ht = 0x%02X\n",
 		ps_adc, lpi->mapping_table[lpi->ps_base_index],
 		lpi->ps_lt, lpi->ps_ht);*/
@@ -937,12 +949,12 @@ static irqreturn_t isl29028_irq_handler(int irq, void *data)
 
 	/*int value1;
 	value1 = gpio_get_value(lpi->intr_pin);
-	D("\n%s: intr_pin = %d, value of intr_pin = %d\n",
+	DPS("\n%s: intr_pin = %d, value of intr_pin = %d\n",
 		__func__, lpi->intr_pin, value1);*/
 
 	disable_irq_nosync(lpi->irq);
 
-	/*D("%s\n", __func__);*/
+	/*DPS("%s\n", __func__);*/
 
 	queue_work(lpi->lp_wq, &sensor_irq_work);
 
@@ -966,11 +978,13 @@ static int psensor_enable(struct isl29028_info *lpi)
 	uint16_t ps_adc = 0;
 #endif
 
-	D("%s\n", __func__);
+	IPS("%s\n", __func__);
 	if (lpi->ps_enable) {
-		D("%s: already enabled\n", __func__);
+		DPS("%s: already enabled\n", __func__);
 		return 0;
 	}
+
+	blocking_notifier_call_chain(&psensor_notifier_list, 1, NULL);
 
 	/* dummy report */
 	input_report_abs(lpi->ps_input_dev, ABS_DISTANCE, -1);
@@ -984,7 +998,7 @@ static int psensor_enable(struct isl29028_info *lpi)
 	ret = _isl29028_set_reg_bit(lpi->i2c_client, 1,
 		ISL29028_CONFIGURE, ISL29028_PROX_EN);
 	if (ret < 0) {
-		pr_err("%s: enable psensor fail\n", __func__);
+		EPS("%s: enable psensor fail\n", __func__);
 		return ret;
 	}
 
@@ -1000,17 +1014,18 @@ static int psensor_enable(struct isl29028_info *lpi)
 
 	ret = set_irq_wake(lpi->irq, 1);
 	if (ret < 0) {
-		pr_err("%s: failed to disable irq %d as a wake interrupt\n",
+		EPS("%s: failed to disable irq %d as a wake interrupt\n",
 			__func__, lpi->irq);
 		return ret;
 	}
 
 #ifdef POLLING_PROXIMITY
-	if (lpi->mfg_mode != NO_IGNORE_BOOT_MODE) {
+	if ((lpi->enable_polling_ignore == 1) &&
+	    (lpi->mfg_mode != NO_IGNORE_BOOT_MODE)) {
 		ps_adc = get_stable_ps_adc_value();
 		if ((lpi->mapping_table != NULL) &&
-				((ps_adc >= (lpi->ps_lt - 1)) ||
-				(lpi->ps_lt >= ABNORMAL_LT)))
+		    ((ps_adc >= (lpi->ps_lt - 1)) ||
+		    (lpi->ps_lt >= ABNORMAL_LT)))
 			queue_delayed_work(lpi->lp_wq, &polling_work,
 				msecs_to_jiffies(POLLING_DELAY));
 	}
@@ -1031,15 +1046,15 @@ static int psensor_disable(struct isl29028_info *lpi)
 
 	judge_and_enable_lightsensor(lpi);
 
-	D("%s\n", __func__);
+	IPS("%s\n", __func__);
 	if (!lpi->ps_enable) {
-		D("%s: already disabled\n", __func__);
+		DPS("%s: already disabled\n", __func__);
 		return 0;
 	}
 
 	ret = set_irq_wake(lpi->irq, 0);
 	if (ret < 0) {
-		pr_err("%s: failed to disable irq %d as a wake interrupt\n",
+		EPS("%s: failed to disable irq %d as a wake interrupt\n",
 			__func__, lpi->irq);
 		return ret;
 	}
@@ -1047,16 +1062,18 @@ static int psensor_disable(struct isl29028_info *lpi)
 	ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
 		ISL29028_CONFIGURE, ISL29028_PROX_EN);
 	if (ret < 0) {
-		pr_err("%s: disable psensor fail\n", __func__);
+		EPS("%s: disable psensor fail\n", __func__);
 		return ret;
 	}
 
 	ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
 		ISL29028_INTERRUPT, ISL29028_INT_PROX_FLAG);
 	if (ret < 0) {
-		pr_err("%s: clear proximity INT flag fail\n", __func__);
+		EPS("%s: clear proximity INT flag fail\n", __func__);
 		return ret;
 	}
+
+	blocking_notifier_call_chain(&psensor_notifier_list, 0, NULL);
 
 	set_irq_type(lpi->irq, IRQF_TRIGGER_LOW);
 
@@ -1078,7 +1095,7 @@ static int psensor_open(struct inode *inode, struct file *file)
 {
 	struct isl29028_info *lpi = lp_info;
 
-	D("%s\n", __func__);
+	DPS("%s\n", __func__);
 
 	if (lpi->psensor_opened)
 		return -EBUSY;
@@ -1092,7 +1109,7 @@ static int psensor_release(struct inode *inode, struct file *file)
 {
 	struct isl29028_info *lpi = lp_info;
 
-	D("%s\n", __func__);
+	DPS("%s\n", __func__);
 
 	lpi->psensor_opened = 0;
 
@@ -1105,7 +1122,7 @@ static long psensor_ioctl(struct file *file, unsigned int cmd,
 	int val;
 	struct isl29028_info *lpi = lp_info;
 
-	D("%s cmd %d\n", __func__, _IOC_NR(cmd));
+	DPS("%s cmd %d\n", __func__, _IOC_NR(cmd));
 
 	switch (cmd) {
 	case CAPELLA_CM3602_IOCTL_ENABLE:
@@ -1120,7 +1137,7 @@ static long psensor_ioctl(struct file *file, unsigned int cmd,
 		return put_user(lpi->ps_enable, (unsigned long __user *)arg);
 		break;
 	default:
-		pr_err("%s: invalid cmd %d\n", __func__, _IOC_NR(cmd));
+		IPS("%s: invalid cmd %d\n", __func__, _IOC_NR(cmd));
 		return -EINVAL;
 	}
 }
@@ -1132,27 +1149,27 @@ static const struct file_operations psensor_fops = {
 	.unlocked_ioctl = psensor_ioctl
 };
 
-struct miscdevice psensor_misc = {
+static struct miscdevice psensor_misc = {
 	.minor = MISC_DYNAMIC_MINOR,
 	.name = "cm3602",
 	.fops = &psensor_fops
 };
 
-void lightsensor_set_kvalue(struct isl29028_info *lpi)
+static void lightsensor_set_kvalue(struct isl29028_info *lpi)
 {
 	if (!lpi) {
-		pr_err("%s: ls_info is empty\n", __func__);
+		ELS("%s: ls_info is empty\n", __func__);
 		return;
 	}
 
-	D("%s: ALS calibrated als_kadc=0x%x\n",
+	ILS("%s: ALS calibrated als_kadc=0x%x\n",
 			__func__, als_kadc);
 
 	if (als_kadc >> 16 == ALS_CALIBRATED)
 		lpi->als_kadc = als_kadc & 0xFFFF;
 	else {
 		lpi->als_kadc = 0;
-		D("%s: no ALS calibrated\n", __func__);
+		ILS("%s: no ALS calibrated\n", __func__);
 	}
 
 	if (lpi->als_kadc && lpi->golden_adc > 0) {
@@ -1163,13 +1180,13 @@ void lightsensor_set_kvalue(struct isl29028_info *lpi)
 		lpi->als_kadc = 1;
 		lpi->als_gadc = 1;
 	}
-	D("%s: als_kadc=0x%x, als_gadc=0x%x\n",
+	ILS("%s: als_kadc=0x%x, als_gadc=0x%x\n",
 		__func__, lpi->als_kadc, lpi->als_gadc);
 }
 
-void psensor_set_kvalue(struct isl29028_info *lpi)
+static void psensor_set_kvalue(struct isl29028_info *lpi)
 {
-	D("%s: PS calibrated ps_kparam1 = 0x%x, ps_kparam2 = 0x%x\n",
+	IPS("%s: PS calibrated ps_kparam1 = 0x%x, ps_kparam2 = 0x%x\n",
 			__func__, ps_kparam1, ps_kparam2);
 
 	if (ps_kparam1 >> 16 == PS_CALIBRATED) {
@@ -1181,7 +1198,7 @@ void psensor_set_kvalue(struct isl29028_info *lpi)
 		lpi->ps_lt = (ps_kparam2 >> 8) & 0xFF;
 		lpi->ps_ht = ps_kparam2 & 0xFF;
 
-		D("%s: PS calibrated ps_B_val = 0x%x, ps_C_val = 0x%x"
+		DPS("%s: PS calibrated ps_B_val = 0x%x, ps_C_val = 0x%x"
 			", ps_A_val = 0x%x, ps_X_val = 0x%x, ps_lt = 0x%x"
 			", ps_ht = 0x%x\n",
 				__func__, lpi->ps_B_val, lpi->ps_C_val,
@@ -1193,7 +1210,7 @@ void psensor_set_kvalue(struct isl29028_info *lpi)
 
 		set_psensor_range(lpi->ps_lt, lpi->ps_ht);
 	} else
-		D("%s: Proximity not calibrated\n", __func__);
+		DPS("%s: Proximity not calibrated\n", __func__);
 }
 
 static int lightsensor_update_table(struct isl29028_info *lpi)
@@ -1207,7 +1224,7 @@ static int lightsensor_update_table(struct isl29028_info *lpi)
 		} else {
 			data[i] = *(lpi->adc_table + i);
 		}
-		D("%s: Calibrated adc_table: data[%d] = %x\n",
+		ILS("%s: Calibrated adc_table: data[%d] = %x\n",
 			__func__, i, data[i]);
 	}
 	memcpy(lpi->cali_table, data, 20);
@@ -1218,12 +1235,11 @@ static int lightsensor_enable(struct isl29028_info *lpi)
 {
 	int ret;
 
-	pr_info("%s\n", __func__);
+	ILS("%s\n", __func__);
 
 	lpi->ls_enable_flag = 1;
-	if (lpi->is_suspend || lpi->ps_irq_flag == 1) {
-		pr_err("%s: system is suspended or proximity is NEAR\n",
-			__func__);
+	if (lpi->ps_irq_flag == 1) {
+		ILS("%s: proximity is NEAR\n", __func__);
 		return 0;
 	}
 
@@ -1231,7 +1247,7 @@ static int lightsensor_enable(struct isl29028_info *lpi)
 		ret = _isl29028_set_reg_bit(lpi->i2c_client, 1,
 			ISL29028_CONFIGURE, ISL29028_ALS_EN);
 		if (ret < 0)
-			pr_err("%s: set auto light sensor fail\n", __func__);
+			ELS("%s: set auto light sensor fail\n", __func__);
 		else {
 			lpi->als_enable = 1;
 			/* report an invalid value first to ensure we
@@ -1248,13 +1264,9 @@ static int lightsensor_enable(struct isl29028_info *lpi)
 
 static int lightsensor_disable(struct isl29028_info *lpi)
 {
-	pr_info("%s\n", __func__);
+	ILS("%s\n", __func__);
 
 	lpi->ls_enable_flag = 0;
-	if (lpi->is_suspend) {
-		pr_err("%s: system is suspended\n", __func__);
-		return 0;
-	}
 
 	lightsensor_real_disable(lpi);
 
@@ -1266,9 +1278,9 @@ static int lightsensor_open(struct inode *inode, struct file *file)
 	struct isl29028_info *lpi = lp_info;
 	int rc = 0;
 
-	D("%s\n", __func__);
+	DLS("%s\n", __func__);
 	if (lpi->lightsensor_opened) {
-		pr_err("%s: already opened\n", __func__);
+		ILS("%s: already opened\n", __func__);
 		rc = -EBUSY;
 	}
 	lpi->lightsensor_opened = 1;
@@ -1279,7 +1291,7 @@ static int lightsensor_release(struct inode *inode, struct file *file)
 {
 	struct isl29028_info *lpi = lp_info;
 
-	D("%s\n", __func__);
+	DLS("%s\n", __func__);
 	lpi->lightsensor_opened = 0;
 	return 0;
 }
@@ -1290,7 +1302,7 @@ static long lightsensor_ioctl(struct file *file, unsigned int cmd,
 	int rc, val;
 	struct isl29028_info *lpi = lp_info;
 
-	D("%s cmd %d\n", __func__, _IOC_NR(cmd));
+	DLS("%s cmd %d\n", __func__, _IOC_NR(cmd));
 
 	switch (cmd) {
 	case LIGHTSENSOR_IOCTL_ENABLE:
@@ -1298,16 +1310,16 @@ static long lightsensor_ioctl(struct file *file, unsigned int cmd,
 			rc = -EFAULT;
 			break;
 		}
-		/*D("%s value = %d\n", __func__, val);*/
+		/*DLS("%s value = %d\n", __func__, val);*/
 		rc = val ? lightsensor_enable(lpi) : lightsensor_disable(lpi);
 		break;
 	case LIGHTSENSOR_IOCTL_GET_ENABLED:
 		val = lpi->ls_enable_flag;
-		/*D("%s enabled %d\n", __func__, val);*/
+		/*DLS("%s enabled %d\n", __func__, val);*/
 		rc = put_user(val, (unsigned long __user *)arg);
 		break;
 	default:
-		pr_err("%s: invalid cmd %d\n", __func__, _IOC_NR(cmd));
+		ILS("%s: invalid cmd %d\n", __func__, _IOC_NR(cmd));
 		rc = -EINVAL;
 	}
 
@@ -1402,15 +1414,15 @@ static ssize_t ps_kadc_store(struct device *dev,
 
 	sscanf(buf, "0x%x 0x%x", &param1, &param2);
 
-	D("%s: store value = 0x%X, 0x%X\n", __func__, param1, param2);
+	DPS("%s: store value = 0x%X, 0x%X\n", __func__, param1, param2);
 
 	lt = (param2 >> 8) & 0xFF;
 	ht = param2 & 0xFF;
 
 	ps_threshold =  (PS_CALIBRATED << 16) | (param2 & 0xFFFF);
 
-	D("%s: lt = 0x%X, ht = 0x%X\n", __func__, lt, ht);
-	D("%s: ps_threshold = 0x%X\n", __func__, ps_threshold);
+	DPS("%s: lt = 0x%X, ht = 0x%X\n", __func__, lt, ht);
+	DPS("%s: ps_threshold = 0x%X\n", __func__, ps_threshold);
 
 	if (lt < ht) {
 
@@ -1423,7 +1435,7 @@ static ssize_t ps_kadc_store(struct device *dev,
 
 		ret = set_psensor_range(lt, ht);
 		if (ret < 0) {
-			printk(KERN_ERR "%s : write ISL29028_PS_LT_HT fail\n",
+			EPS("%s : write ISL29028_PS_LT_HT fail\n",
 				__func__);
 			return -1;
 		}
@@ -1434,7 +1446,7 @@ static ssize_t ps_kadc_store(struct device *dev,
 		lpi->original_ht = ht;
 #endif
 	} else
-		D("%s: Setting PS calibration ERROR!\n", __func__);
+		DPS("%s: Setting PS calibration ERROR!\n", __func__);
 
 	return count;
 }
@@ -1452,14 +1464,14 @@ static ssize_t ps_led_show(struct device *dev,
 	buffer[0] = ISL29028_CONFIGURE;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail\n", __func__);
+		EPS("%s: I2C_RxData fail\n", __func__);
 		return ret;
 	}
 	value = buffer[0];
-	D("%s: Configure reg = 0x%x\n", __func__, value);
+	DPS("%s: Configure reg = 0x%x\n", __func__, value);
 
 	lpi->led = (value & 0x08) >> 3;
-	D("%s: lpi->led = 0x%x\n", __func__, lpi->led);
+	DPS("%s: lpi->led = 0x%x\n", __func__, lpi->led);
 
 	ret = sprintf(buf, "Current led setting: %s\n",
 		(lpi->led == 0) ? "100mA" : "200mA");
@@ -1477,19 +1489,18 @@ static ssize_t ps_led_store(struct device *dev,
 
 	sscanf(buf, "%d", &param);
 
-	D("%s: store value = %d\n", __func__, param);
+	DPS("%s: store value = %d\n", __func__, param);
 
 	if (param == 0 || param == 1) {
 		ret = _isl29028_set_reg_bit(lpi->i2c_client,
 			param, ISL29028_CONFIGURE, ISL29028_PROX_DR);
 		if (ret < 0) {
-			printk(KERN_ERR "%s : Set LED  fail\n",
-				__func__);
+			EPS("%s : Set LED  fail\n", __func__);
 			return -1;
 		}
 		lpi->led = param;
 	} else
-		D("%s: Setting PS LED ERROR, please use 0 or 1!\n", __func__);
+		DPS("%s: Setting PS LED ERROR, please use 0 or 1!\n", __func__);
 
 	return count;
 }
@@ -1506,7 +1517,7 @@ static ssize_t ps_test_mode_show(struct device *dev,
 	buffer[0] = ISL29028_TEST1;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail, Test1\n", __func__);
+		EPS("%s: I2C_RxData fail, Test1\n", __func__);
 		return ret;
 	}
 	test1 = buffer[0];
@@ -1514,7 +1525,7 @@ static ssize_t ps_test_mode_show(struct device *dev,
 	buffer[0] = ISL29028_TEST2;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail, Test2\n", __func__);
+		EPS("%s: I2C_RxData fail, Test2\n", __func__);
 		return ret;
 	}
 	test2 = buffer[0];
@@ -1541,20 +1552,20 @@ static ssize_t ps_test_mode_store(struct device *dev,
 
 	sscanf(buf, "0x%02x 0x%02x", &test1, &test2);
 
-	D("%s: store value = %d\n", __func__, value);
+	DPS("%s: store value = %d\n", __func__, value);
 
 	buffer[0] = ISL29028_TEST1;
 	buffer[1] = (test1 & 0xFF);
 	ret = I2C_TxData(buffer, 2);
 	if (ret < 0)
-		printk(KERN_ERR "%s : failed to set ISL29028_TEST1\n",
+		EPS("%s : failed to set ISL29028_TEST1\n",
 			__func__);
 
 	buffer[0] = ISL29028_TEST2;
 	buffer[1] = (test2 & 0xFF);
 	ret = I2C_TxData(buffer, 2);
 	if (ret < 0)
-		printk(KERN_ERR "%s : failed to set ISL29028_TEST2\n",
+		EPS("%s : failed to set ISL29028_TEST2\n",
 			__func__);
 
 	return count;
@@ -1597,7 +1608,7 @@ static ssize_t ls_enable_show(struct device *dev,
 	buffer[0] = ISL29028_CONFIGURE;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: I2C_RxData fail\n", __func__);
+		ELS("%s: I2C_RxData fail\n", __func__);
 		return ret;
 	}
 	value = buffer[0];
@@ -1632,13 +1643,13 @@ static ssize_t ls_enable_store(struct device *dev,
 		want_enable = 0;
 	}
 
-	D("%s: want_enable = %d!\n", __func__, want_enable);
+	DLS("%s: want_enable = %d!\n", __func__, want_enable);
 
 	ret = _isl29028_set_reg_bit(lpi->i2c_client,
 		((want_enable) ? 1 : 0),
 		ISL29028_CONFIGURE, ISL29028_ALS_EN);
 	if (ret < 0)
-		pr_err("%s: ls enable fail\n", __func__);
+		ELS("%s: ls enable fail\n", __func__);
 	else
 		lpi->als_enable = (want_enable) ? 1 : 0;
 
@@ -1670,18 +1681,18 @@ static ssize_t ls_kadc_store(struct device *dev,
 
 	sscanf(buf, "%d", &kadc_temp);
 	if (kadc_temp <= 0 || lpi->golden_adc <= 0) {
-		printk(KERN_ERR "%s: kadc_temp=0x%x, als_gadc=0x%x\n",
+		ELS("%s: kadc_temp=0x%x, als_gadc=0x%x\n",
 			__func__, kadc_temp, lpi->golden_adc);
 		return -EINVAL;
 	}
 
 	lpi->als_kadc = kadc_temp;
 	lpi->als_gadc = lpi->golden_adc;
-	printk(KERN_INFO "%s: als_kadc=0x%x, als_gadc=0x%x\n",
+	ILS("%s: als_kadc=0x%x, als_gadc=0x%x\n",
 			__func__, lpi->als_kadc, lpi->als_gadc);
 
 	if (lightsensor_update_table(lpi) < 0)
-		printk(KERN_ERR "%s: update ls table fail\n", __func__);
+		ELS("%s: update ls table fail\n", __func__);
 
 	return count;
 }
@@ -1694,7 +1705,7 @@ static int lightsensor_setup(struct isl29028_info *lpi)
 
 	lpi->ls_input_dev = input_allocate_device();
 	if (!lpi->ls_input_dev) {
-		pr_err("%s: could not allocate ls input device\n", __func__);
+		ELS("%s: could not allocate ls input device\n", __func__);
 		return -ENOMEM;
 	}
 	lpi->ls_input_dev->name = "lightsensor-level";
@@ -1703,14 +1714,14 @@ static int lightsensor_setup(struct isl29028_info *lpi)
 
 	ret = input_register_device(lpi->ls_input_dev);
 	if (ret < 0) {
-		pr_err("%s: can not register ls input device\n",
+		ELS("%s: can not register ls input device\n",
 				__func__);
 		goto err_free_ls_input_device;
 	}
 
 	ret = misc_register(&lightsensor_misc);
 	if (ret < 0) {
-		pr_err("%s: can not register ls misc device\n",
+		ELS("%s: can not register ls misc device\n",
 				__func__);
 		goto err_unregister_ls_input_device;
 	}
@@ -1730,7 +1741,7 @@ static int psensor_setup(struct isl29028_info *lpi)
 
 	lpi->ps_input_dev = input_allocate_device();
 	if (!lpi->ps_input_dev) {
-		pr_err("%s: could not allocate ps input device\n", __func__);
+		EPS("%s: could not allocate ps input device\n", __func__);
 		return -ENOMEM;
 	}
 	lpi->ps_input_dev->name = "proximity";
@@ -1739,13 +1750,13 @@ static int psensor_setup(struct isl29028_info *lpi)
 
 	ret = input_register_device(lpi->ps_input_dev);
 	if (ret < 0) {
-		pr_err("%s: could not register ps input device\n", __func__);
+		EPS("%s: could not register ps input device\n", __func__);
 		goto err_free_ps_input_device;
 	}
 
 	ret = misc_register(&psensor_misc);
 	if (ret < 0) {
-		pr_err("%s: could not register ps misc device\n", __func__);
+		EPS("%s: could not register ps misc device\n", __func__);
 		goto err_unregister_ps_input_device;
 	}
 
@@ -1767,28 +1778,28 @@ static int isl29028_power_up_seq(void)
 	buffer[1] = 0x0;
 	ret = I2C_TxData(buffer, 2);
 	if (ret < 0)
-		printk(KERN_ERR "%s : failed to set ISL29028_CONFIGURE\n",
+		EPS("%s : failed to set ISL29028_CONFIGURE\n",
 			__func__);
 
 	buffer[0] = ISL29028_TEST2;
 	buffer[1] = 0x29;
 	ret = I2C_TxData(buffer, 2);
 	if (ret < 0)
-		printk(KERN_ERR "%s : failed to set ISL29028_TEST2[1]\n",
+		EPS("%s : failed to set ISL29028_TEST2[1]\n",
 			__func__);
 
 	buffer[0] = ISL29028_TEST1;
 	buffer[1] = 0x0;
 	ret = I2C_TxData(buffer, 2);
 	if (ret < 0)
-		printk(KERN_ERR "%s : failed to set ISL29028_TEST1\n",
+		EPS("%s : failed to set ISL29028_TEST1\n",
 			__func__);
 
 	buffer[0] = ISL29028_TEST2;
 	buffer[1] = 0x0;
 	ret = I2C_TxData(buffer, 2);
 	if (ret < 0)
-		printk(KERN_ERR "%s : failed to set ISL29028_TEST2[2]\n",
+		EPS("%s : failed to set ISL29028_TEST2[2]\n",
 			__func__);
 
 	msleep(1);
@@ -1803,25 +1814,25 @@ static int isl29028_setup(struct isl29028_info *lpi)
 
 	ret = gpio_request(lpi->intr_pin, "gpio_isl29028_intr");
 	if (ret < 0) {
-		pr_err("%s: gpio %d request failed (%d)\n",
+		EPS("%s: gpio %d request failed (%d)\n",
 			__func__, lpi->intr_pin, ret);
 		return ret;
 	}
 
 	ret = gpio_direction_input(lpi->intr_pin);
 	if (ret < 0) {
-		pr_err("%s: failed to set gpio %d as input (%d)\n",
+		EPS("%s: failed to set gpio %d as input (%d)\n",
 			__func__, lpi->intr_pin, ret);
 		goto fail_free_intr_pin;
 	}
 
-	ret = request_irq(lpi->irq,
+	ret = request_any_context_irq(lpi->irq,
 			isl29028_irq_handler,
 			IRQF_TRIGGER_LOW,
 			"isl29028",
 			lpi);
 	if (ret < 0) {
-		pr_err("%s: request_irq(%d) failed for gpio %d (%d)\n",
+		EPS("%s: request_irq(%d) failed for gpio %d (%d)\n",
 			__func__, lpi->irq,
 			lpi->intr_pin, ret);
 		goto fail_free_intr_pin;
@@ -1829,7 +1840,7 @@ static int isl29028_setup(struct isl29028_info *lpi)
 
 	ret = isl29028_power_up_seq();
 	if (ret < 0) {
-		pr_err("%s: isl29018_power_up_seq() fail!!\n", __func__);
+		EPS("%s: isl29018_power_up_seq() fail!!\n", __func__);
 		goto err_configure;
 	}
 
@@ -1837,7 +1848,7 @@ static int isl29028_setup(struct isl29028_info *lpi)
 	buffer[1] = CONFIG_DEFAULT;
 	ret = I2C_TxData(buffer, 2);
 	if (ret < 0) {
-		printk(KERN_ERR "%s : failed to set LPS Configuration fail\n",
+		EPS("%s : failed to set LPS Configuration fail\n",
 			__func__);
 		goto err_configure;
 	}
@@ -1845,7 +1856,7 @@ static int isl29028_setup(struct isl29028_info *lpi)
 
 	ret = set_lsensor_range(0x0, 0x0);
 	if (ret < 0) {
-		printk(KERN_ERR "%s : write ISL29028_LS_TH123 fail\n",
+		ELS("%s : write ISL29028_LS_TH123 fail\n",
 			__func__);
 		goto err_set_lsensor_range;
 	}
@@ -1854,7 +1865,7 @@ static int isl29028_setup(struct isl29028_info *lpi)
 	lpi->ps_ht = lpi->default_ps_ht;
 	ret = set_psensor_range(lpi->ps_lt, lpi->ps_ht);
 	if (ret < 0) {
-		printk(KERN_ERR "%s : write ISL29028_PS_LT_HT fail\n",
+		EPS("%s : write ISL29028_PS_LT_HT fail\n",
 			__func__);
 		goto err_set_psensor_range;
 	}
@@ -1863,7 +1874,7 @@ static int isl29028_setup(struct isl29028_info *lpi)
 	buffer[1] = INTR_DEFAULT;
 	ret = I2C_TxData(buffer, 2);
 	if (ret < 0) {
-		pr_err("%s: set ALS PRST fail\n", __func__);
+		EPS("%s: set ALS PRST fail\n", __func__);
 		goto err_set_als_prst;
 	}
 
@@ -1879,52 +1890,22 @@ fail_free_intr_pin:
 	return ret;
 }
 
-static void isl29028_early_suspend(struct early_suspend *h)
+static int isl29028_suspend(struct i2c_client *client, pm_message_t mesg)
 {
-
-	int ret;
-	struct isl29028_info *lpi = lp_info;
-
-	D("%s\n", __func__);
-
-	lpi->is_suspend = 1;
-
-	if (lpi->als_enable) {
-		/*D("%s: lpi->ps_enable = %d\n", __func__, lpi->ps_enable);
-		buffer[0] = ISL29028_CONFIGURE;
-		buffer[1] = (lpi->ps_enable) ? 0xE2 : 0x62;
-		ret = I2C_TxData(buffer, 2);
-		if (ret < 0) {
-			printk(KERN_ERR "%s : Disable sensors fail\n",
-				__func__);
-		} else
-			lpi->als_enable = 0;*/
-
-		ret = _isl29028_set_reg_bit(lpi->i2c_client, 0,
-			ISL29028_CONFIGURE, ISL29028_ALS_EN);
-		if (ret < 0)
-			pr_err("%s: disable auto light sensor fail\n",
-				__func__);
-		else
-			lpi->als_enable = 0;
-	}
+	return 0;
 }
 
-static void isl29028_late_resume(struct early_suspend *h)
+static int isl29028_resume(struct i2c_client *client)
 {
 	struct isl29028_info *lpi = lp_info;
 	char buffer[2];
 	uint8_t reg_config = 0;
 	int ret = 0;
 
-	D("isl_resume: ls_enable_flag = %d, ps_irq_flag = %d\n",
-		lpi->ls_enable_flag, lpi->ps_irq_flag);
-
-
 	buffer[0] = ISL29028_CONFIGURE;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0)
-		pr_err("%s: I2C_RxData fail (ISL29028_CONFIGURE)\n",
+		EPS("%s: I2C_RxData fail (ISL29028_CONFIGURE)\n",
 			__func__);
 	reg_config = buffer[0];
 
@@ -1933,32 +1914,33 @@ static void isl29028_late_resume(struct early_suspend *h)
 			(ret == 0)) {
 		ret = isl29028_power_up_seq();
 		if (ret < 0)
-			pr_err("%s: isl29018_power_up_seq() fail!!\n",
+			EPS("%s: isl29018_power_up_seq() fail!!\n",
 				__func__);
 
 		buffer[0] = ISL29028_CONFIGURE;
 		buffer[1] = CONFIG_DEFAULT;
 		ret = I2C_TxData(buffer, 2);
 		if (ret < 0)
-			printk(KERN_ERR "%s : failed to set "
+			EPS("%s : failed to set "
 				"ISL29028_CONFIGURE2\n", __func__);
 
 		buffer[0] = ISL29028_INTERRUPT;
 		buffer[1] = INTR_DEFAULT;
 		ret = I2C_TxData(buffer, 2);
 		if (ret < 0)
-			printk(KERN_ERR "%s : Set LPS INTR2 fail\n", __func__);
+			EPS("%s : Set LPS INTR2 fail\n", __func__);
 
 		ret = set_lsensor_range(0x0, 0x0);
 		if (ret < 0)
-			printk(KERN_ERR "%s : write ISL29028_LS_TH123 fail\n",
+			ELS("%s : write ISL29028_LS_TH123 fail\n",
 				__func__);
 
 		set_psensor_th(lpi->original_lt, lpi->original_ht);
+
+		DPS("isl_resume: Re-initialize isl29028, ret = %d\n", ret);
 	}
 
-	lpi->is_suspend = 0;
-	judge_and_enable_lightsensor(lpi);
+	return ret;
 }
 
 static int isl29028_probe(struct i2c_client *client,
@@ -1969,18 +1951,18 @@ static int isl29028_probe(struct i2c_client *client,
 	struct isl29028_info *lpi;
 	struct isl29028_platform_data *pdata;
 
-	D("%s\n", __func__);
+	IPS("%s\n", __func__);
 
 	lpi = kzalloc(sizeof(struct isl29028_info), GFP_KERNEL);
 	if (!lpi)
 		return -ENOMEM;
 
-	/*D("%s: client->irq = %d\n", __func__, client->irq);*/
+	/*DPS("%s: client->irq = %d\n", __func__, client->irq);*/
 
 	lpi->i2c_client = client;
 	pdata = client->dev.platform_data;
 	if (!pdata) {
-		pr_err("%s: Assign platform_data error!!\n", __func__);
+		EPS("%s: Assign platform_data error!!\n", __func__);
 		ret = -EBUSY;
 		goto err_platform_data_null;
 	}
@@ -2001,8 +1983,7 @@ static int isl29028_probe(struct i2c_client *client,
 	lpi->mapping_table = pdata->mapping_table;
 	lpi->mapping_size = pdata->mapping_size;
 	lpi->ps_base_index = (pdata->mapping_size - 1);
-
-	D("%s: lpi->mapping_size = %d\n", __func__, lpi->mapping_size);
+	lpi->enable_polling_ignore = pdata->enable_polling_ignore;
 
 	lp_info = lpi;
 
@@ -2011,24 +1992,24 @@ static int isl29028_probe(struct i2c_client *client,
 	buffer[0] = ISL29028_CHIPID;
 	ret = I2C_RxData(buffer, 1);
 	if (ret < 0) {
-		pr_err("%s: Read Chip ID fail\n", __func__);
+		EPS("%s: Read Chip ID fail\n", __func__);
 		goto err_platform_data_null;
 	}
 
 	if (buffer[0] != 0xA1) {
-		pr_err("%s: Error Chip ID or i2c error\n", __func__);
+		EPS("%s: Error Chip ID or i2c error\n", __func__);
 		goto err_platform_data_null;
 	}
 
 	ret = lightsensor_setup(lpi);
 	if (ret < 0) {
-		pr_err("%s: lightsensor_setup error!!\n", __func__);
+		ELS("%s: lightsensor_setup error!!\n", __func__);
 		goto err_lightsensor_setup;
 	}
 
 	ret = psensor_setup(lpi);
 	if (ret < 0) {
-		pr_err("%s: lightsensor_setup error!!\n", __func__);
+		EPS("%s: psensor_setup error!!\n", __func__);
 		goto err_psensor_setup;
 	}
 
@@ -2036,14 +2017,14 @@ static int isl29028_probe(struct i2c_client *client,
 
 	ret = lightsensor_update_table(lpi);
 	if (ret < 0) {
-		pr_err("%s: update ls table fail\n",
+		ELS("%s: update ls table fail\n",
 			__func__);
 		goto err_lightsensor_update_table;
 	}
 
 	lpi->lp_wq = create_singlethread_workqueue("isl29028_wq");
 	if (!lpi->lp_wq) {
-		pr_err("%s: can't create workqueue\n", __func__);
+		EPS("%s: can't create workqueue\n", __func__);
 		ret = -ENOMEM;
 		goto err_create_singlethread_workqueue;
 	}
@@ -2052,7 +2033,7 @@ static int isl29028_probe(struct i2c_client *client,
 
 	ret = isl29028_setup(lpi);
 	if (ret < 0) {
-		pr_err("%s: isl29028_setup error!\n", __func__);
+		EPS("%s: isl29028_setup error!\n", __func__);
 		goto err_isl29028_setup;
 	}
 
@@ -2121,13 +2102,7 @@ static int isl29028_probe(struct i2c_client *client,
 	if (ret)
 		goto err_create_ps_device;
 
-	lpi->early_suspend.level =
-			EARLY_SUSPEND_LEVEL_BLANK_SCREEN + 1;
-	lpi->early_suspend.suspend = isl29028_early_suspend;
-	lpi->early_suspend.resume = isl29028_late_resume;
-	register_early_suspend(&lpi->early_suspend);
-
-	D("%s: Probe success!\n", __func__);
+	IPS("%s: Probe success!\n", __func__);
 	return ret;
 
 err_create_ps_device:
@@ -2138,36 +2113,23 @@ err_create_ls_device:
 	class_destroy(lpi->isl29028_class);
 err_create_class:
 err_isl29028_setup:
+	wake_lock_destroy(&(lpi->ps_wake_lock));
 	destroy_workqueue(lpi->lp_wq);
+	input_unregister_device(lpi->ls_input_dev);
+	input_free_device(lpi->ls_input_dev);
+	input_unregister_device(lpi->ps_input_dev);
+	input_free_device(lpi->ps_input_dev);
 err_create_singlethread_workqueue:
 err_lightsensor_update_table:
+	misc_deregister(&psensor_misc);
 err_psensor_setup:
+	misc_deregister(&lightsensor_misc);
 err_lightsensor_setup:
 err_platform_data_null:
 	kfree(lpi);
 	return ret;
 }
-/*
-#define ATAG_PS        0x29028290
-static int __init parse_tag_ps_threshold(const struct tag *tags)
-{
-	int found = 0;
-	struct tag *t = (struct tag *)tags;
 
-	for (; t->hdr.size; t = tag_next(t)) {
-		if (t->hdr.tag == ATAG_PS) {
-			found = 1;
-			break;
-		}
-	}
-
-	if (found)
-		ps_threshold = t->u.revision.rev;
-	D("%s: ps_threshold = 0x%x\n", __func__, ps_threshold);
-	return 0;
-}
-__tagtable(ATAG_PS, parse_tag_ps_threshold);
-*/
 static const struct i2c_device_id isl29028_i2c_id[] = {
 	{ISL29028_I2C_NAME, 0},
 	{}
@@ -2176,6 +2138,8 @@ static const struct i2c_device_id isl29028_i2c_id[] = {
 static struct i2c_driver isl29028_driver = {
 	.id_table = isl29028_i2c_id,
 	.probe = isl29028_probe,
+	.suspend = isl29028_suspend,
+	.resume = isl29028_resume,
 	.driver = {
 		.name = ISL29028_I2C_NAME,
 		.owner = THIS_MODULE,

@@ -55,6 +55,7 @@ struct isl29028_platform_data {
 	uint8_t debounce;
 	uint8_t *mapping_table;
 	uint8_t mapping_size;
+	uint8_t enable_polling_ignore;
 };
 
 #endif

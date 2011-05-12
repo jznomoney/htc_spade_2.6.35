@@ -30,24 +30,6 @@ battery parameter defines (depend on board design)
 
 static BOOL support_ds2746_gauge_ic = TRUE;
 
-enum BATTERY_ID_ENUM {
-	BATTERY_ID_UNKNOWN = 0,
-	BATTERY_ID_SONY_1300MAH_FORMOSA,
-	BATTERY_ID_SONY_1300MAH_HTE,
-	BATTERY_ID_SANYO_1300MAH_HTE,
-	BATTERY_ID_SANYO_1300MAH_TWS,
-	BATTERY_ID_NUM /* include unknown battery*/
-};
-
-UINT32 ID_RANGE[] =
-{
-  /* id resister range = [min, max)*/
-  7150, 15500,   /* Sony 1300mAh (Formosa) */    /* 7.1k~15k */
-  27500, 49500,   /* Sony 1300mAh (HTE) */  	  /* 28k~49.5k */
-  15500, 27500,   /* Sanyo 1300mAh (HTE) */ 	  /* 16k~27k */
-  0, 7150,   /* Samsung 1230mAh */  	 /* 0k~7k */
-};
-
 /*This table is calculated according to temp formula for temp mapping.
 If temp_adc is located on 0-95, then the temp_01c is 700.
 			  96-99, then the temp_01c is 690.
@@ -58,7 +40,7 @@ If temp_adc is located on 0-95, then the temp_01c is 700.
 			  ...
 			  1433-2046, then the temp_01c is -11.
 */
-UINT32 TEMP_MAP_300K[] =
+UINT32 TEMP_MAP_300K_100_4360[] =
 {
 0, 96, 100, 103, 107, 111, 115, 119, 123, 127,
 133, 137, 143, 148, 154, 159, 165, 172, 178, 185,
@@ -71,7 +53,20 @@ UINT32 TEMP_MAP_300K[] =
 1406, 1433, 2047,
 };
 
-UINT32 TEMP_MAP_1000K[] =
+UINT32 TEMP_MAP_300K_47_3440[] =
+{
+0, 68, 70, 72, 74, 76, 78, 81, 83, 85,
+88, 91, 93, 96, 99, 102, 105, 109, 112, 116,
+119, 123, 127, 131, 135, 139, 144, 148, 153, 158,
+163, 169, 174, 180, 186, 192, 199, 205, 212, 219,
+227, 234, 242, 250, 259, 268, 277, 286, 296, 306,
+317, 327, 339, 350, 362, 374, 387, 401, 414, 428,
+443, 458, 474, 490, 506, 523, 540, 558, 577, 596,
+615, 656, 677, 698, 720, 742, 765, 789, 812, 837,
+861, 886, 2047,
+};
+
+UINT32 TEMP_MAP_1000K_100_4360[] =
 {
 0, 30, 31, 32, 34, 35, 36, 38, 39, 40,
 42, 44, 45, 47, 49, 51, 53, 55, 57, 60,
@@ -84,145 +79,18 @@ UINT32 TEMP_MAP_1000K[] =
 812, 843, 2047,
 };
 
-UINT32 *TEMP_MAP = TEMP_MAP_300K;
+UINT32 *TEMP_MAP = TEMP_MAP_300K_100_4360;
 
-UINT32 FL_25[] =
-{
-  1280,   /* Unknown battery */
-  1280,   /* Sony 1300mAh (Formosa) */
-  1280,   /* Sony 1300mAh (HTE) */
-  1250,   /* Sanyo 1300mAh (HTE) */
-  1230,   /* Samsung 1230mAh */
-};
+/* use default parameter if it doesn't be passed from board */
+#define PD_M_COEF_DEFAULT	(30)
+#define PD_M_RESL_DEFAULT	(100)
+#define PD_T_COEF_DEFAULT	(250)
+#define CAPACITY_DEDUCTION_DEFAULT	(0)
 
-UINT32 PD_M_COEF[] =
-{
-  /* for TAO PMA, this is defined as PD_M; for TPE PMA, this is defined as FT or t*/
-  24, 	/* Unknown battery */
-  24, 	/* Sony 1300mAh (Formosa) */
-  24, 	/* Sony 1300mAh (HTE) */
-  27, 	/* Sanyo 1300mAh (HTE) */
-  30,  /* Samsung 1230mAh */
-};
-
-UINT32 PD_M_RESL[] =
-{
-  /* for TAO PMA, this is defined as PD_M; for TPE PMA, this is defined as FT or t*/
-  100,	/* Unknown battery */
-  100,	/* Sony 1300mAh (Formosa) */
-  100,	/* Sony 1300mAh (HTE) */
-  100,	/* Sanyo 1300mAh (HTE) */
-  100,  /* Samsung 1230mAh */
-};
-
-UINT32 PD_T_COEF[] =
-{
-  /* Ex: 140 -> 0.014, 156 -> 0.0156*/
-  140,	/* Unknown battery */
-  140,	/* Sony 1300mAh (Formosa) */
-  140,	/* Sony 1300mAh (HTE) */
-  156,	/* Sanyo 1300mAh (HTE) */
-  250,	/* Samsung 1230mAh */
-};
-
-/*! star_lee 20100426 - update KADC discharge parameter */
-UINT32 M_PARAMETER_SONY_1300MAH_FORMOSA[] =
-{
-  /* capacity (in 0.01%) -> voltage (in mV)*/
-  10000, 4100, 5500, 3839, 2400, 3759, 400, 3667, 0, 3397,
-};
-
-UINT32 M_PARAMETER_Samsung_1230MAH_FORMOSA[] =
+UINT32 M_PARAMETER_DEFAULT[] =
 {
   /* capacity (in 0.01%) -> voltage (in mV)*/
   10000, 4135, 7500, 3960, 4700, 3800, 1700, 3727, 900, 3674, 300, 3640, 0, 3420,
-};
-
-UINT32 *M_PARAMTER_TABLE[] =
-{
-  /* Unknown battery */
-  (UINT32 *) (M_PARAMETER_SONY_1300MAH_FORMOSA),
-  /* same as Sony 1300mAh (Formosa) currently... */
-  /* Sony 1300mAh (Formosa) */
-  (UINT32 *) (M_PARAMETER_SONY_1300MAH_FORMOSA),
-  /* Sony 1300mAh (HTE) */
-  (UINT32 *) (M_PARAMETER_SONY_1300MAH_FORMOSA),
-  /* same as Sony 1300mAh (Formosa) currently... */
-  /* Sanyo 1300mAh (HTE) */
-  (UINT32 *) (M_PARAMETER_SONY_1300MAH_FORMOSA),
-  /* same as Sony 1300mAh (Formosa) currently... */
-  /* Samsung 1230mAh */
-  (UINT32 *) (M_PARAMETER_Samsung_1230MAH_FORMOSA),
-  /* same as Sony 1300mAh (Formosa) currently... */
-};
-
-INT32 TEMP_RANGE[] =
-{
-  /* mapping temp to temp_index*/
-  200,  		  /* ~20C */
-  100,  		  /* 20~10C  */
-  50,   		  /* 10~5C */
-  0,			  /* 5~0C */ -5,   		  /* 0~-5C */ -10, 		   /* -5~-10C */ -3000,
-  /* -10C~ */
-};
-
-UINT32 *PD_M_COEF_TABLE_BOOT[] =
-{
-  /* mapping current to pd_m_coef table when booting*/
-  (UINT32 *) (PD_M_COEF),		/* ~20C,	using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* 20~10C,  using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* 10~5C,   using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* 5~0C,	using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* 0~-5C,   using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* -5~-10C, using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* -10C~,   using PD_M_COEF */
-};
-
-UINT32 *PD_M_COEF_TABLE[] =
-{
-  /* mapping current to pd_m_coef table*/
-  (UINT32 *) (PD_M_COEF),		/* ~20C,	using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* 20~10C,  using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* 10~5C,   using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* 5~0C,	using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* 0~-5C,   using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* -5~-10C, using PD_M_COEF */
-  (UINT32 *) (PD_M_COEF),		/* -10C~,   using PD_M_COEF */
-};
-
-UINT32 *PD_M_RESL_TABLE_BOOT[] =
-{
-  /* mapping current to pd_m_coef table when booting*/
-  (UINT32 *) (PD_M_RESL),		/* ~20C,	using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* 20~10C,  using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* 10~5C,   using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* 5~0C,	using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* 0~-5C,   using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* -5~-10C, using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* -10C~,   using PD_M_RESL */
-};
-
-UINT32 *PD_M_RESL_TABLE[] =
-{
-  /* mapping current to pd_m_coef table*/
-  (UINT32 *) (PD_M_RESL),		/* ~20C,	using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* 20~10C,  using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* 10~5C,   using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* 5~0C,	using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* 0~-5C,   using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* -5~-10C, using PD_M_RESL */
-  (UINT32 *) (PD_M_RESL),		/* -10C~,   using PD_M_RESL */
-};
-
-UINT32 CAPACITY_DEDUCTION_01p[] =
-{
-  0,  					  /* ~20C,    upper capacity 100 is usable */
-  0,						/* 20~10C,  upper capacity 95 is usable */
-  0,						/* 10~5C,   upper capacity 92 is usable */
-  0,						/* 5~0C,	upper capacity 90 is usable */
-  0,						/* 0~-5C,   upper capacity 87 is usable */
-  0,						/* -5~-10C, upper capacity 85 is usable */
-  0,						/* -10C~,   upper capacity 85 is usable */
 };
 
 /*========================================================================================
@@ -243,6 +111,7 @@ static INT32 acr_adc_to_mv_coef = 625;
 static INT32 acr_adc_to_mv_resl = 1580;
 static INT32 charge_counter_zero_base_mAh = 500;
 
+static INT32 id_adc_overflow = 3067; /* 3067 < id_adc: rawdata overflow */
 static INT32 id_adc_resl = 2047;
 static INT32 temp_adc_resl = 2047;
 
@@ -259,7 +128,8 @@ static INT32 over_low_temp_release_01c = 30;
 
 /* function config*/
 
-static BOOL is_allow_batt_id_change = FALSE;
+static BOOL is_allow_batt_id_change = TRUE;	// MATT
+extern BOOL is_need_battery_id_detection;
 
 /*boot up voltage*/
 

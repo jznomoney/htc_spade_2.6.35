@@ -110,8 +110,7 @@ static uint32_t spade_sdslot_switchvdd(struct device *dev, unsigned int vdd)
 	sdslot_vdd = vdd;
 
 	if (vdd == 0) {
-		printk(KERN_INFO "%s: Disabling SD slot power (dealy 10ms)\n", __func__);
-		mdelay(10);
+		printk(KERN_INFO "%s: Disabling SD slot power\n", __func__);
 		config_gpio_table(sdcard_off_gpio_table,
 				  ARRAY_SIZE(sdcard_off_gpio_table));
 		vreg_disable(vreg_sdslot);

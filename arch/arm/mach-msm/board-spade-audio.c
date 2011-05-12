@@ -123,7 +123,7 @@ static unsigned aux_pcm_gpio_on[] = {
 void spade_snddev_poweramp_on(int en)
 {
 	static int first_time = 1;
-	pr_info("%s %d\n", __func__, en);
+	pr_aud_info("%s %d\n", __func__, en);
 	if (en) {
 		if (first_time) {
 			msleep(70);
@@ -144,7 +144,7 @@ void spade_snddev_poweramp_on(int en)
 
 void spade_snddev_hsed_pamp_on(int en)
 {
-	pr_info("%s %d\n", __func__, en);
+	pr_aud_info("%s %d\n", __func__, en);
 	if (en) {
 		msleep(60);
 		gpio_set_value(PM8058_GPIO_PM_TO_SYS(SPADE_AUD_HP_EN), 1);
@@ -166,7 +166,7 @@ void spade_snddev_hs_spk_pamp_on(int en)
 
 void spade_snddev_receiver_pamp_on(int en)
 {
-	pr_info("%s %d\n", __func__, en);
+	pr_aud_info("%s %d\n", __func__, en);
 	if (en) {
 		gpio_set_value(PM8058_GPIO_PM_TO_SYS(SPADE_AUD_EP_EN), 1);
 		mdelay(5);
@@ -182,7 +182,7 @@ void spade_snddev_receiver_pamp_on(int en)
 void spade_snddev_bt_sco_pamp_on(int en)
 {
 	static int bt_sco_refcount;
-	pr_info("%s %d\n", __func__, en);
+	pr_aud_info("%s %d\n", __func__, en);
 	mutex_lock(&bt_sco_lock);
 	if (en) {
 		if (++bt_sco_refcount == 1) {
@@ -205,7 +205,7 @@ void spade_snddev_bt_sco_pamp_on(int en)
 void spade_mic_enable(int en, int shift)
 {
 	static int flag = 0;
-	pr_info("%s: %d, shift %d\n", __func__, en, shift);
+	pr_aud_info("%s: %d, shift %d\n", __func__, en, shift);
 
 	mutex_lock(&mic_lock);
 	if (en)
@@ -223,7 +223,7 @@ void spade_mic_enable(int en, int shift)
 
 void spade_snddev_imic_pamp_on(int en)
 {
-	pr_info("%s %d\n", __func__, en);
+	pr_aud_info("%s %d\n", __func__, en);
 	/* Base on sequence of routing path, tx is opend after rx is enabled.
 	 * Therefore, power on micbias by A3254 to avoid pop sound */
 	/* spade_mic_enable(en, 0); */
@@ -231,7 +231,7 @@ void spade_snddev_imic_pamp_on(int en)
 
 void spade_snddev_emic_pamp_on(int en)
 {
-	pr_info("%s %d\n", __func__, en);
+	pr_aud_info("%s %d\n", __func__, en);
 }
 
 void spade_snddev_fmspk_pamp_on(int en)
@@ -274,7 +274,7 @@ int spade_get_rx_vol(uint8_t hw, int network, int level)
 	level = (level > 100)? 100 : ((level < 0) ? 0 : level);
 	vol = info->gain[network][(uint32_t)((info->max_step - 1) * level / 100)];
 
-	pr_info("%s(%d, %d, %d) => %d\n", __func__, hw, network, level, vol);
+	pr_aud_info("%s(%d, %d, %d) => %d\n", __func__, hw, network, level, vol);
 	return vol;
 }
 
@@ -282,7 +282,7 @@ void spade_rx_amp_enable(int en)
 {
 	if (curr_rx_mode != 0) {
 		atomic_set(&aic3254_ctl, 1);
-		pr_info("%s: curr_rx_mode 0x%x, en %d\n",
+		pr_aud_info("%s: curr_rx_mode 0x%x, en %d\n",
 			__func__, curr_rx_mode, en);
 		if (curr_rx_mode & BIT_SPEAKER)
 			spade_snddev_poweramp_on(en);
@@ -300,7 +300,7 @@ void spade_rx_amp_enable(int en)
 
 void spade_tx_amp_enable(int en)
 {
-	pr_info("%s %d\n", __func__, en);
+	pr_aud_info("%s %d\n", __func__, en);
 	spade_mic_enable(en, 0);
 }
 

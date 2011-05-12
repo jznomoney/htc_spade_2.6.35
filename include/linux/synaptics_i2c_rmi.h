@@ -78,6 +78,7 @@ struct synaptics_i2c_rmi_platform_data {
 	int8_t sensitivity_adjust;
 	uint32_t dup_threshold;
 	uint32_t margin_inactive_pixel[4];
+	uint16_t filter_level[4];
 };
 
 struct page_description {
